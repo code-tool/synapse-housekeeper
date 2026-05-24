@@ -208,6 +208,10 @@ func (cli *Client) CleanupRoomCandidatesIt(
 			continue
 		}
 
+		if candidate.Room.RoomType != event.RoomTypeDefault {
+			continue
+		}
+
 		if !yield(ctx, candidate) {
 			stopped = true
 			cancel()
