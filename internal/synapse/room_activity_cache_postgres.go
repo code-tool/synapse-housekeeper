@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -42,8 +41,12 @@ func (c *RoomActivityCachePostgres) ensureSchema(ctx context.Context) error {
 CREATE TABLE IF NOT EXISTS synapse_room_activity_cache (
 	room_id text PRIMARY KEY,
 	last_message_at timestamptz NOT NULL,
+	joined_members integer NOT NULL DEFAULT 0,
 	updated_at timestamptz NOT NULL DEFAULT now()
-);`
+);
+
+ALTER TABLE synapse_room_activity_cache
+ADD COLUMN IF NOT EXISTS joined_members integer NOT NULL DEFAULT 0;`
 
 	if _, err := c.pool.Exec(ctx, query); err != nil {
 		return fmt.Errorf("ensure room activity cache schema: %w", err)
@@ -52,34 +55,40 @@ CREATE TABLE IF NOT EXISTS synapse_room_activity_cache (
 	return nil
 }
 
-func (c *RoomActivityCachePostgres) LastMessageAt(ctx context.Context, roomID id.RoomID) (time.Time, bool, error) {
+func (c *RoomActivityCachePostgres) RoomActivity(ctx context.Context, roomID id.RoomID) (*RoomActivityCacheEntry, error) {
 	const query = `
-SELECT last_message_at
+SELECT room_id, last_message_at, joined_members, updated_at
 FROM synapse_room_activity_cache
 WHERE room_id = $1;`
 
-	var lastMessageAt time.Time
-	err := c.pool.QueryRow(ctx, query, roomID.String()).Scan(&lastMessageAt)
+	var (
+		entry     RoomActivityCacheEntry
+		roomIDStr string
+	)
+	err := c.pool.QueryRow(ctx, query, roomID.String()).
+		Scan(&roomIDStr, &entry.LastMessageAt, &entry.JoinedMembers, &entry.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return time.Time{}, false, nil
+		return nil, nil
 	}
 	if err != nil {
-		return time.Time{}, false, err
+		return nil, err
 	}
+	entry.RoomID = id.RoomID(roomIDStr)
 
-	return lastMessageAt, true, nil
+	return &entry, nil
 }
 
-func (c *RoomActivityCachePostgres) StoreLastMessageAt(ctx context.Context, roomID id.RoomID, lastMessageAt time.Time) error {
+func (c *RoomActivityCachePostgres) StoreRoomActivity(ctx context.Context, entry RoomActivityCacheEntry) error {
 	const query = `
-INSERT INTO synapse_room_activity_cache (room_id, last_message_at, updated_at)
-VALUES ($1, $2, now())
+INSERT INTO synapse_room_activity_cache (room_id, last_message_at, joined_members, updated_at)
+VALUES ($1, $2, $3, now())
 ON CONFLICT (room_id) DO UPDATE
 SET
 	last_message_at = EXCLUDED.last_message_at,
+	joined_members = EXCLUDED.joined_members,
 	updated_at = now();`
 
-	_, err := c.pool.Exec(ctx, query, roomID.String(), lastMessageAt)
+	_, err := c.pool.Exec(ctx, query, entry.RoomID.String(), entry.LastMessageAt, entry.JoinedMembers)
 
 	return err
 }

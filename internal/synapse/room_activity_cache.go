@@ -9,9 +9,16 @@ import (
 	"maunium.net/go/mautrix/id"
 )
 
+type RoomActivityCacheEntry struct {
+	RoomID        id.RoomID
+	LastMessageAt time.Time
+	JoinedMembers int
+	UpdatedAt     time.Time
+}
+
 type RoomActivityCache interface {
-	LastMessageAt(ctx context.Context, roomID id.RoomID) (time.Time, bool, error)
-	StoreLastMessageAt(ctx context.Context, roomID id.RoomID, lastMessageAt time.Time) error
+	RoomActivity(ctx context.Context, roomID id.RoomID) (*RoomActivityCacheEntry, error)
+	StoreRoomActivity(ctx context.Context, entry RoomActivityCacheEntry) error
 }
 
 type RoomActivityCacheNull struct{}
@@ -29,11 +36,11 @@ func NewRoomActivityCache(ctx context.Context, dsn string) (RoomActivityCache, i
 	return cache, cache, nil
 }
 
-func (RoomActivityCacheNull) LastMessageAt(ctx context.Context, roomID id.RoomID) (time.Time, bool, error) {
-	return time.Time{}, false, nil
+func (RoomActivityCacheNull) RoomActivity(ctx context.Context, roomID id.RoomID) (*RoomActivityCacheEntry, error) {
+	return nil, nil
 }
 
-func (RoomActivityCacheNull) StoreLastMessageAt(ctx context.Context, roomID id.RoomID, lastMessageAt time.Time) error {
+func (RoomActivityCacheNull) StoreRoomActivity(ctx context.Context, entry RoomActivityCacheEntry) error {
 	return nil
 }
 

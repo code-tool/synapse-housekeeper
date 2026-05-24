@@ -75,15 +75,28 @@ func (cli *Client) RoomCleanupCandidate(
 	opts RoomCleanupCandidateOptions,
 ) (RoomCleanupCandidate, bool, error) {
 	if roomInfo.JoinedMembers <= 0 {
+		_ = cli.roomActivityCache.StoreRoomActivity(ctx, RoomActivityCacheEntry{
+			RoomID:        roomInfo.RoomID,
+			LastMessageAt: time.Time{},
+			JoinedMembers: roomInfo.JoinedMembers,
+		})
+
 		return RoomCleanupCandidate{
 			Room:   roomInfo,
 			Reason: RoomCleanupReasonEmpty,
 		}, true, nil
 	}
 
-	if cli.roomActivityCache != nil {
-		lastMessageAt, found, err := cli.roomActivityCache.LastMessageAt(ctx, roomInfo.RoomID)
-		if err == nil && found && !lastMessageAt.Before(opts.AbandonedBefore) {
+	entry, err := cli.roomActivityCache.RoomActivity(ctx, roomInfo.RoomID)
+	if err == nil && entry != nil {
+		if entry.LastMessageAt.IsZero() {
+			return RoomCleanupCandidate{
+				Room:   roomInfo,
+				Reason: RoomCleanupReasonNoMessages,
+			}, true, nil
+		}
+
+		if !entry.LastMessageAt.Before(opts.AbandonedBefore) {
 			return RoomCleanupCandidate{}, false, nil
 		}
 	}
@@ -93,9 +106,11 @@ func (cli *Client) RoomCleanupCandidate(
 		return RoomCleanupCandidate{}, false, err
 	}
 
-	if cli.roomActivityCache != nil && !lastMessageAt.IsZero() {
-		_ = cli.roomActivityCache.StoreLastMessageAt(ctx, roomInfo.RoomID, lastMessageAt)
-	}
+	_ = cli.roomActivityCache.StoreRoomActivity(ctx, RoomActivityCacheEntry{
+		RoomID:        roomInfo.RoomID,
+		LastMessageAt: lastMessageAt,
+		JoinedMembers: roomInfo.JoinedMembers,
+	})
 
 	if lastMessageAt.IsZero() {
 		return RoomCleanupCandidate{
