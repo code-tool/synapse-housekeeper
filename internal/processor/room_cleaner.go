@@ -32,8 +32,8 @@ type RoomCleanerStatistics struct {
 	AbandonedMulti  int64
 }
 
-func NewRoomCleaner(log *zap.Logger, synapseClient *synapse.Client) *RoomCleaner {
-	return &RoomCleaner{log: log, synapseClient: synapseClient, workersCount: 5}
+func NewRoomCleaner(log *zap.Logger, synapseClient *synapse.Client, workersCount int) *RoomCleaner {
+	return &RoomCleaner{log: log, synapseClient: synapseClient, workersCount: workersCount}
 }
 
 func (r *RoomCleaner) purgeRoom(ctx context.Context, doRealJob bool, roomId id.RoomID) error {

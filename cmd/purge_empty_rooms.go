@@ -16,6 +16,7 @@ type CleanupRoomsCmdConfig struct {
 	SynapseUserID        string `mapstructure:"synapse-user-id"`
 	SynapseAccessToken   string `mapstructure:"synapse-access-token"`
 	PostgresDSN          string `mapstructure:"postgres-dsn"`
+	WorkersCount         int    `mapstructure:"workers-count"`
 }
 
 var cleanupRoomsCmd = &cobra.Command{
@@ -25,6 +26,9 @@ var cleanupRoomsCmd = &cobra.Command{
 		cfg, err := CreateConfigFromViper[CleanupRoomsCmdConfig](viper.GetViper(), cmd.Flags())
 		if err != nil {
 			return err
+		}
+		if cfg.WorkersCount < 1 {
+			return fmt.Errorf("workers-count must be greater than zero")
 		}
 
 		doRealJob, err := cmd.Flags().GetBool("do-real-job")
@@ -49,7 +53,7 @@ var cleanupRoomsCmd = &cobra.Command{
 			synapseClient.WithRoomActivityCache(activityCache)
 		}
 
-		return processor.NewRoomCleaner(logger, synapseClient).Process(cmd.Context(), doRealJob)
+		return processor.NewRoomCleaner(logger, synapseClient, cfg.WorkersCount).Process(cmd.Context(), doRealJob)
 	},
 }
 
@@ -58,6 +62,7 @@ func init() {
 	cleanupRoomsCmd.Flags().String("synapse-user-id", "", "Synapse UserID")
 	cleanupRoomsCmd.Flags().String("synapse-access-token", "", "Synapse Access Token")
 	cleanupRoomsCmd.Flags().String("postgres-dsn", "", "PostgreSQL DSN for room activity cache")
+	cleanupRoomsCmd.Flags().Int("workers-count", 4, "Number of room cleanup workers")
 
 	cleanupRoomsCmd.Flags().Bool("do-real-job", false, "Without this flag to action will be performed")
 
