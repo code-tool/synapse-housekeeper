@@ -24,7 +24,10 @@ func NewClient(homeserverURL string, userID id.UserID, accessToken string) (*Cli
 	}
 	baseClient.Client = &http.Client{Timeout: 5 * time.Minute}
 
-	return &Client{Client: &synapseadmin.Client{Client: baseClient}}, nil
+	return &Client{
+		Client:            &synapseadmin.Client{Client: baseClient},
+		roomActivityCache: RoomActivityCacheNull{},
+	}, nil
 }
 
 func (cli *Client) WithRoomActivityCache(cache RoomActivityCache) *Client {

@@ -43,15 +43,13 @@ var cleanupRoomsCmd = &cobra.Command{
 			return fmt.Errorf("can't create Synapse Client: %w", err)
 		}
 
-		if cfg.PostgresDSN != "" {
-			activityCache, err := synapse.NewRoomActivityCachePostgres(cmd.Context(), cfg.PostgresDSN)
-			if err != nil {
-				return fmt.Errorf("can't create room activity cache: %w", err)
-			}
-			defer activityCache.Close()
-
-			synapseClient.WithRoomActivityCache(activityCache)
+		activityCache, activityCacheCloser, err := synapse.NewRoomActivityCache(cmd.Context(), cfg.PostgresDSN)
+		if err != nil {
+			return fmt.Errorf("can't create room activity cache: %w", err)
 		}
+		defer activityCacheCloser.Close()
+
+		synapseClient.WithRoomActivityCache(activityCache)
 
 		return processor.NewRoomCleaner(logger, synapseClient, cfg.WorkersCount).Process(cmd.Context(), doRealJob)
 	},

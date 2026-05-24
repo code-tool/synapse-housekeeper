@@ -27,11 +27,6 @@ type RoomCleanupCandidate struct {
 	LastMessageAt time.Time
 }
 
-type RoomActivityCache interface {
-	LastMessageAt(ctx context.Context, roomID id.RoomID) (time.Time, bool, error)
-	StoreLastMessageAt(ctx context.Context, roomID id.RoomID, lastMessageAt time.Time) error
-}
-
 type RoomCleanupCandidateOptions struct {
 	AbandonedBefore time.Time
 	ListRequest     synapseadmin.ReqListRoom

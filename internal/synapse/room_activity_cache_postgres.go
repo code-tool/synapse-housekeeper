@@ -31,8 +31,10 @@ func NewRoomActivityCachePostgres(ctx context.Context, connString string) (*Room
 	return cache, nil
 }
 
-func (c *RoomActivityCachePostgres) Close() {
+func (c *RoomActivityCachePostgres) Close() error {
 	c.pool.Close()
+
+	return nil
 }
 
 func (c *RoomActivityCachePostgres) ensureSchema(ctx context.Context) error {
