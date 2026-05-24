@@ -59,7 +59,7 @@ func init() {
 	cleanupRoomsCmd.Flags().String("synapse-access-token", "", "Synapse Access Token")
 	cleanupRoomsCmd.Flags().String("postgres-dsn", "", "PostgreSQL DSN for room activity cache")
 
-	cleanupRoomsCmd.Flags().Bool("do-real-job", !false, "Without this flag to action will be performed")
+	cleanupRoomsCmd.Flags().Bool("do-real-job", false, "Without this flag to action will be performed")
 
 	rootCmd.AddCommand(cleanupRoomsCmd)
 }
