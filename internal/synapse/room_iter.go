@@ -27,6 +27,11 @@ type RoomCleanupCandidate struct {
 	LastMessageAt time.Time
 }
 
+type RoomActivityCache interface {
+	LastMessageAt(ctx context.Context, roomID id.RoomID) (time.Time, bool, error)
+	StoreLastMessageAt(ctx context.Context, roomID id.RoomID, lastMessageAt time.Time) error
+}
+
 type RoomCleanupCandidateOptions struct {
 	AbandonedBefore time.Time
 	ListRequest     synapseadmin.ReqListRoom
@@ -72,7 +77,7 @@ func (cli *Client) LastRoomMessageAt(ctx context.Context, roomID id.RoomID) (tim
 func (cli *Client) RoomCleanupCandidate(
 	ctx context.Context,
 	roomInfo synapseadmin.RoomInfo,
-	abandonedBefore time.Time,
+	opts RoomCleanupCandidateOptions,
 ) (RoomCleanupCandidate, bool, error) {
 	if roomInfo.JoinedMembers <= 0 {
 		return RoomCleanupCandidate{
@@ -81,9 +86,20 @@ func (cli *Client) RoomCleanupCandidate(
 		}, true, nil
 	}
 
+	if cli.roomActivityCache != nil {
+		lastMessageAt, found, err := cli.roomActivityCache.LastMessageAt(ctx, roomInfo.RoomID)
+		if err == nil && found && !lastMessageAt.Before(opts.AbandonedBefore) {
+			return RoomCleanupCandidate{}, false, nil
+		}
+	}
+
 	lastMessageAt, err := cli.LastRoomMessageAt(ctx, roomInfo.RoomID)
 	if err != nil {
 		return RoomCleanupCandidate{}, false, err
+	}
+
+	if cli.roomActivityCache != nil && !lastMessageAt.IsZero() {
+		_ = cli.roomActivityCache.StoreLastMessageAt(ctx, roomInfo.RoomID, lastMessageAt)
 	}
 
 	if lastMessageAt.IsZero() {
@@ -93,7 +109,7 @@ func (cli *Client) RoomCleanupCandidate(
 		}, true, nil
 	}
 
-	if lastMessageAt.Before(abandonedBefore) {
+	if lastMessageAt.Before(opts.AbandonedBefore) {
 		return RoomCleanupCandidate{
 			Room:          roomInfo,
 			Reason:        RoomCleanupReasonAbandoned,
@@ -135,7 +151,7 @@ func (cli *Client) CleanupRoomCandidatesIt(
 						opts.OnRoomChecked(ctx, roomInfo)
 					}
 
-					candidate, ok, err := cli.RoomCleanupCandidate(ctx, roomInfo, opts.AbandonedBefore)
+					candidate, ok, err := cli.RoomCleanupCandidate(ctx, roomInfo, opts)
 					if err != nil {
 						if opts.OnRoomError != nil && opts.OnRoomError(ctx, roomInfo, err) {
 							continue

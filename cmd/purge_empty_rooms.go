@@ -15,6 +15,7 @@ type CleanupRoomsCmdConfig struct {
 	SynapseHomeserverUrl string `mapstructure:"synapse-homeserver-url"`
 	SynapseUserID        string `mapstructure:"synapse-user-id"`
 	SynapseAccessToken   string `mapstructure:"synapse-access-token"`
+	PostgresDSN          string `mapstructure:"postgres-dsn"`
 }
 
 var cleanupRoomsCmd = &cobra.Command{
@@ -38,9 +39,17 @@ var cleanupRoomsCmd = &cobra.Command{
 			return fmt.Errorf("can't create Synapse Client: %w", err)
 		}
 
-		roomCleaner := processor.NewRoomCleaner(logger, synapseClient)
+		if cfg.PostgresDSN != "" {
+			activityCache, err := synapse.NewRoomActivityCachePostgres(cmd.Context(), cfg.PostgresDSN)
+			if err != nil {
+				return fmt.Errorf("can't create room activity cache: %w", err)
+			}
+			defer activityCache.Close()
 
-		return roomCleaner.Process(cmd.Context(), doRealJob)
+			synapseClient.WithRoomActivityCache(activityCache)
+		}
+
+		return processor.NewRoomCleaner(logger, synapseClient).Process(cmd.Context(), doRealJob)
 	},
 }
 
@@ -48,6 +57,7 @@ func init() {
 	cleanupRoomsCmd.Flags().String("synapse-homeserver-url", "", "Synapse Homeserver URL")
 	cleanupRoomsCmd.Flags().String("synapse-user-id", "", "Synapse UserID")
 	cleanupRoomsCmd.Flags().String("synapse-access-token", "", "Synapse Access Token")
+	cleanupRoomsCmd.Flags().String("postgres-dsn", "", "PostgreSQL DSN for room activity cache")
 
 	cleanupRoomsCmd.Flags().Bool("do-real-job", !false, "Without this flag to action will be performed")
 
