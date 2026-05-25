@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/FZambia/viper-lite"
 	"github.com/spf13/cobra"
@@ -17,6 +18,8 @@ type CleanupRoomsCmdConfig struct {
 	SynapseAccessToken   string `mapstructure:"synapse-access-token"`
 	PostgresDSN          string `mapstructure:"postgres-dsn"`
 	WorkersCount         int    `mapstructure:"workers-count"`
+	AbandonedDays        int    `mapstructure:"abandoned-days"`
+	NoCacheCleanup       bool   `mapstructure:"no-cache-cleanup"`
 }
 
 var cleanupRoomsCmd = &cobra.Command{
@@ -29,6 +32,9 @@ var cleanupRoomsCmd = &cobra.Command{
 		}
 		if cfg.WorkersCount < 1 {
 			return fmt.Errorf("workers-count must be greater than zero")
+		}
+		if cfg.AbandonedDays < 1 {
+			return fmt.Errorf("abandoned-days must be greater than zero")
 		}
 
 		doRealJob, err := cmd.Flags().GetBool("do-real-job")
@@ -49,9 +55,11 @@ var cleanupRoomsCmd = &cobra.Command{
 		}
 		defer activityCacheCloser.Close()
 
+		abandonedBefore := time.Now().Add(-time.Duration(cfg.AbandonedDays) * 24 * time.Hour)
 		iterator := synapse.NewRoomCleanupIterator(synapseClient, activityCache)
 
-		return processor.NewRoomCleaner(logger, synapseClient, iterator, cfg.WorkersCount).Process(cmd.Context(), doRealJob)
+		return processor.NewRoomCleaner(logger, synapseClient, iterator, cfg.WorkersCount).
+			Process(cmd.Context(), doRealJob, abandonedBefore, cfg.NoCacheCleanup)
 	},
 }
 
@@ -61,6 +69,8 @@ func init() {
 	cleanupRoomsCmd.Flags().String("synapse-access-token", "", "Synapse Access Token")
 	cleanupRoomsCmd.Flags().String("postgres-dsn", "", "PostgreSQL DSN for room activity cache")
 	cleanupRoomsCmd.Flags().Int("workers-count", 4, "Number of room cleanup workers")
+	cleanupRoomsCmd.Flags().Int("abandoned-days", 458, "Rooms with no messages for this many days are cleanup candidates")
+	cleanupRoomsCmd.Flags().Bool("no-cache-cleanup", false, "Write candidates to cache and skip eviction (for analytics before real deletion)")
 
 	cleanupRoomsCmd.Flags().Bool("do-real-job", false, "Without this flag to action will be performed")
 

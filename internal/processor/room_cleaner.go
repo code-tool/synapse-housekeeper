@@ -110,7 +110,7 @@ func (r *RoomCleaner) worker(
 	}
 }
 
-func (r *RoomCleaner) Process(ctx context.Context, doRealJob bool) error {
+func (r *RoomCleaner) Process(ctx context.Context, doRealJob bool, abandonedBefore time.Time, noCacheCleanup bool) error {
 	lRoomReq := synapseadmin.ReqListRoom{
 		Direction: mautrix.DirectionBackward,
 		OrderBy:   "joined_members",
@@ -152,11 +152,9 @@ func (r *RoomCleaner) Process(ctx context.Context, doRealJob bool) error {
 		}
 	}()
 
-	const day = 24 * time.Hour
-	abandonedBefore := time.Now().Add(-(365 + 31*3) * day)
-
 	itErr := r.iterator.Iterate(ctx, synapse.RoomCleanupCandidateOptions{
 		AbandonedBefore: abandonedBefore,
+		NoCacheCleanup:  noCacheCleanup,
 		ListRequest:     lRoomReq,
 		Workers:         r.workersCount,
 		OnRoomChecked: func(ctx context.Context, roomInfo synapseadmin.RoomInfo) {
