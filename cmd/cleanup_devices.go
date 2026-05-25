@@ -11,17 +11,17 @@ import (
 	"synapse-housekeeper/internal/synapse"
 )
 
-type CleanupOldDevicesCmdConfig struct {
+type CleanupDevicesCmdConfig struct {
 	SynapseHomeserverUrl string `mapstructure:"synapse-homeserver-url"`
 	SynapseUserID        string `mapstructure:"synapse-user-id"`
 	SynapseAccessToken   string `mapstructure:"synapse-access-token"`
 }
 
-var cleanupOldDevicesCmd = &cobra.Command{
-	Use:   "cleanup-old-devices",
-	Short: "Delete old devices from users",
+var cleanupDevicesCmd = &cobra.Command{
+	Use:   "cleanup-devices",
+	Short: "Delete stale devices from users",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := CreateConfigFromViper[CleanupOldDevicesCmdConfig](viper.GetViper(), cmd.Flags())
+		cfg, err := CreateConfigFromViper[CleanupDevicesCmdConfig](viper.GetViper(), cmd.Flags())
 		if err != nil {
 			return err
 		}
@@ -43,11 +43,11 @@ var cleanupOldDevicesCmd = &cobra.Command{
 }
 
 func init() {
-	cleanupOldDevicesCmd.Flags().String("synapse-homeserver-url", "", "Synapse Homeserver URL")
-	cleanupOldDevicesCmd.Flags().String("synapse-user-id", "", "Synapse UserID")
-	cleanupOldDevicesCmd.Flags().String("synapse-access-token", "", "Synapse Access Token")
+	cleanupDevicesCmd.Flags().String("synapse-homeserver-url", "", "Synapse Homeserver URL")
+	cleanupDevicesCmd.Flags().String("synapse-user-id", "", "Synapse UserID")
+	cleanupDevicesCmd.Flags().String("synapse-access-token", "", "Synapse Access Token")
 
-	cleanupOldDevicesCmd.Flags().Bool("do-real-job", false, "Without this flag to action will be performed")
+	cleanupDevicesCmd.Flags().Bool("do-real-job", false, "Without this flag to action will be performed")
 
-	rootCmd.AddCommand(cleanupOldDevicesCmd)
+	rootCmd.AddCommand(cleanupDevicesCmd)
 }
