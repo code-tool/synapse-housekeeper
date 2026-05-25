@@ -13,7 +13,7 @@ import (
 )
 
 var (
-	logger *zap.Logger
+	logger = zap.NewNop()
 )
 
 type RootCmdConfig struct {
@@ -51,23 +51,22 @@ func Execute() {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
-	shutdown := func() {
-		cancel()
+	shutdown := func(err error) {
+		if err == nil || errors.Is(err, context.Canceled) {
+			return
+		}
+
+		logger.Error("command execution failed", zap.Error(err))
+		os.Exit(1)
 	}
 
 	select {
 	case err := <-errChan:
-		if err != nil {
-			if !errors.Is(err, context.Canceled) {
-				logger.Error("command execution failed", zap.Error(err))
-			}
-
-			os.Exit(1)
-		}
-
-		shutdown()
+		cancel()
+		shutdown(err)
 	case <-sigs:
-		shutdown()
+		cancel()
+		shutdown(<-errChan)
 	}
 }
 
