@@ -28,7 +28,6 @@ func NewClient(homeserverURL string, userID id.UserID, accessToken string) (*Cli
 	}, nil
 }
 
-
 func (cli *Client) MakeFullRequest(ctx context.Context, params mautrix.FullRequest) ([]byte, error) {
 	return cli.Client.Client.MakeFullRequest(ctx, params)
 }
@@ -221,7 +220,7 @@ func (cli *Client) AdminFetchEvent(ctx context.Context, eventID id.EventID) (res
 		ResponseJSON: &resp,
 	})
 
-	return nil, nil
+	return
 }
 
 func (cli *Client) AdminContext(ctx context.Context, roomID id.RoomID, eventID id.EventID, filter *mautrix.FilterPart, limit int) (resp *mautrix.RespContext, err error) {
