@@ -29,7 +29,6 @@ type RoomCleanupCandidate struct {
 
 type RoomCleanupCandidateOptions struct {
 	AbandonedBefore time.Time
-	ListRequest     synapseadmin.ReqListRoom
 	Workers         int
 	// NoCacheCleanup disables candidate eviction: candidates are written to cache
 	// and DeleteCandidateEntries is not called. Use for analytics runs before real deletion.
@@ -216,7 +215,12 @@ func (it *RoomCleanupIterator) Iterate(
 	errG.Go(func() error {
 		defer close(jobs)
 
-		return it.client.ListRoomsIt(ctx, opts.ListRequest, func(ctx context.Context, roomInfo synapseadmin.RoomInfo) bool {
+		listReq := synapseadmin.ReqListRoom{
+			Direction: mautrix.DirectionBackward,
+			OrderBy:   "joined_members",
+			Limit:     1000,
+		}
+		return it.client.ListRoomsIt(ctx, listReq, func(ctx context.Context, roomInfo synapseadmin.RoomInfo) bool {
 			select {
 			case <-ctx.Done():
 				return false

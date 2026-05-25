@@ -111,12 +111,6 @@ func (r *RoomCleaner) worker(
 }
 
 func (r *RoomCleaner) Process(ctx context.Context, doRealJob bool, abandonedBefore time.Time, noCacheCleanup bool) error {
-	lRoomReq := synapseadmin.ReqListRoom{
-		Direction: mautrix.DirectionBackward,
-		OrderBy:   "joined_members",
-		Limit:     1000,
-	}
-
 	stat := &RoomCleanerStatistics{}
 	logStats := func() {
 		r.log.Info("statistics",
@@ -155,7 +149,6 @@ func (r *RoomCleaner) Process(ctx context.Context, doRealJob bool, abandonedBefo
 	itErr := r.iterator.Iterate(ctx, synapse.RoomCleanupCandidateOptions{
 		AbandonedBefore: abandonedBefore,
 		NoCacheCleanup:  noCacheCleanup,
-		ListRequest:     lRoomReq,
 		Workers:         r.workersCount,
 		OnRoomChecked: func(ctx context.Context, roomInfo synapseadmin.RoomInfo) {
 			atomic.AddInt64(&stat.Processed, 1)
