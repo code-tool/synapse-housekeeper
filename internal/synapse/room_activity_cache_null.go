@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"strings"
+	"time"
 
 	"maunium.net/go/mautrix/id"
 )
@@ -34,5 +35,9 @@ func (RoomActivityCacheNull) RoomActivity(ctx context.Context, roomID id.RoomID)
 }
 
 func (RoomActivityCacheNull) StoreRoomActivity(ctx context.Context, entry RoomActivityCacheEntry) error {
+	return nil
+}
+
+func (RoomActivityCacheNull) DeleteCandidateEntries(_ context.Context, _ time.Time) error {
 	return nil
 }

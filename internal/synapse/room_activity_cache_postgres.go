@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -90,5 +91,15 @@ SET
 
 	_, err := c.pool.Exec(ctx, query, entry.RoomID.String(), entry.LastMessageAt, entry.JoinedMembers)
 
+	return err
+}
+
+func (c *RoomActivityCachePostgres) DeleteCandidateEntries(ctx context.Context, abandonedBefore time.Time) error {
+	const query = `
+DELETE FROM synapse_room_activity_cache
+WHERE joined_members <= 0
+   OR last_message_at < $1`
+
+	_, err := c.pool.Exec(ctx, query, abandonedBefore)
 	return err
 }
