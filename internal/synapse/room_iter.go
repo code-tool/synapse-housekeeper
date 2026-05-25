@@ -31,6 +31,9 @@ type RoomCleanupCandidateOptions struct {
 	AbandonedBefore time.Time
 	ListRequest     synapseadmin.ReqListRoom
 	Workers         int
+	// NoCacheCleanup disables candidate eviction: candidates are written to cache
+	// and DeleteCandidateEntries is not called. Use for analytics runs before real deletion.
+	NoCacheCleanup bool
 
 	OnRoomChecked func(ctx context.Context, roomInfo synapseadmin.RoomInfo)
 
@@ -84,11 +87,13 @@ func (it *RoomCleanupIterator) candidate(
 	opts RoomCleanupCandidateOptions,
 ) (RoomCleanupCandidate, bool, error) {
 	if roomInfo.JoinedMembers <= 0 {
-		_ = it.roomActivityCache.StoreRoomActivity(ctx, RoomActivityCacheEntry{
-			RoomID:        roomInfo.RoomID,
-			LastMessageAt: time.Time{},
-			JoinedMembers: roomInfo.JoinedMembers,
-		})
+		if opts.NoCacheCleanup {
+			_ = it.roomActivityCache.StoreRoomActivity(ctx, RoomActivityCacheEntry{
+				RoomID:        roomInfo.RoomID,
+				LastMessageAt: time.Time{},
+				JoinedMembers: roomInfo.JoinedMembers,
+			})
+		}
 
 		return RoomCleanupCandidate{
 			Room:   roomInfo,
@@ -115,13 +120,15 @@ func (it *RoomCleanupIterator) candidate(
 		return RoomCleanupCandidate{}, false, err
 	}
 
-	_ = it.roomActivityCache.StoreRoomActivity(ctx, RoomActivityCacheEntry{
-		RoomID:        roomInfo.RoomID,
-		LastMessageAt: lastMessageAt,
-		JoinedMembers: roomInfo.JoinedMembers,
-	})
-
 	if lastMessageAt.IsZero() {
+		if opts.NoCacheCleanup {
+			_ = it.roomActivityCache.StoreRoomActivity(ctx, RoomActivityCacheEntry{
+				RoomID:        roomInfo.RoomID,
+				LastMessageAt: lastMessageAt,
+				JoinedMembers: roomInfo.JoinedMembers,
+			})
+		}
+
 		return RoomCleanupCandidate{
 			Room:   roomInfo,
 			Reason: RoomCleanupReasonNoMessages,
@@ -129,12 +136,26 @@ func (it *RoomCleanupIterator) candidate(
 	}
 
 	if lastMessageAt.Before(opts.AbandonedBefore) {
+		if opts.NoCacheCleanup {
+			_ = it.roomActivityCache.StoreRoomActivity(ctx, RoomActivityCacheEntry{
+				RoomID:        roomInfo.RoomID,
+				LastMessageAt: lastMessageAt,
+				JoinedMembers: roomInfo.JoinedMembers,
+			})
+		}
+
 		return RoomCleanupCandidate{
 			Room:          roomInfo,
 			Reason:        RoomCleanupReasonAbandoned,
 			LastMessageAt: lastMessageAt,
 		}, true, nil
 	}
+
+	_ = it.roomActivityCache.StoreRoomActivity(ctx, RoomActivityCacheEntry{
+		RoomID:        roomInfo.RoomID,
+		LastMessageAt: lastMessageAt,
+		JoinedMembers: roomInfo.JoinedMembers,
+	})
 
 	return RoomCleanupCandidate{}, false, nil
 }
@@ -229,7 +250,11 @@ func (it *RoomCleanupIterator) Iterate(
 
 	err := <-waitErrCh
 	if stopped && errors.Is(err, context.Canceled) {
-		return nil
+		err = nil
+	}
+
+	if err == nil && !opts.NoCacheCleanup {
+		_ = it.roomActivityCache.DeleteCandidateEntries(ctx, opts.AbandonedBefore)
 	}
 
 	return err
