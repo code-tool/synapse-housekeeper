@@ -49,9 +49,9 @@ var cleanupRoomsCmd = &cobra.Command{
 		}
 		defer activityCacheCloser.Close()
 
-		synapseClient.WithRoomActivityCache(activityCache)
+		iterator := synapse.NewRoomCleanupIterator(synapseClient, activityCache)
 
-		return processor.NewRoomCleaner(logger, synapseClient, cfg.WorkersCount).Process(cmd.Context(), doRealJob)
+		return processor.NewRoomCleaner(logger, synapseClient, iterator, cfg.WorkersCount).Process(cmd.Context(), doRealJob)
 	},
 }
 

@@ -19,6 +19,7 @@ import (
 type RoomCleaner struct {
 	log           *zap.Logger
 	synapseClient *synapse.Client
+	iterator      *synapse.RoomCleanupIterator
 
 	workersCount int
 }
@@ -31,8 +32,8 @@ type RoomCleanerStatistics struct {
 	AbandonedMulti  int64
 }
 
-func NewRoomCleaner(log *zap.Logger, synapseClient *synapse.Client, workersCount int) *RoomCleaner {
-	return &RoomCleaner{log: log, synapseClient: synapseClient, workersCount: workersCount}
+func NewRoomCleaner(log *zap.Logger, synapseClient *synapse.Client, iterator *synapse.RoomCleanupIterator, workersCount int) *RoomCleaner {
+	return &RoomCleaner{log: log, synapseClient: synapseClient, iterator: iterator, workersCount: workersCount}
 }
 
 func (r *RoomCleaner) purgeRoom(ctx context.Context, doRealJob bool, roomInfo *synapseadmin.RoomInfo) error {
@@ -154,7 +155,7 @@ func (r *RoomCleaner) Process(ctx context.Context, doRealJob bool) error {
 	const day = 24 * time.Hour
 	abandonedBefore := time.Now().Add(-(365 + 31*3) * day)
 
-	itErr := r.synapseClient.CleanupRoomCandidatesIt(ctx, synapse.RoomCleanupCandidateOptions{
+	itErr := r.iterator.Iterate(ctx, synapse.RoomCleanupCandidateOptions{
 		AbandonedBefore: abandonedBefore,
 		ListRequest:     lRoomReq,
 		Workers:         r.workersCount,
