@@ -39,14 +39,23 @@ type RoomCleanupCandidateOptions struct {
 	OnRoomError func(ctx context.Context, roomInfo synapseadmin.RoomInfo, err error) bool
 }
 
-func (cli *Client) LastRoomMessageAt(ctx context.Context, roomID id.RoomID) (time.Time, error) {
+type RoomCleanupIterator struct {
+	client            *Client
+	roomActivityCache RoomActivityCache
+}
+
+func NewRoomCleanupIterator(client *Client, cache RoomActivityCache) *RoomCleanupIterator {
+	return &RoomCleanupIterator{client: client, roomActivityCache: cache}
+}
+
+func (it *RoomCleanupIterator) lastRoomMessageAt(ctx context.Context, roomID id.RoomID) (time.Time, error) {
 	now := time.Now()
-	tsToEventResp, err := cli.AdminTimestampToEvent(ctx, roomID, now, mautrix.DirectionBackward)
+	tsToEventResp, err := it.client.AdminTimestampToEvent(ctx, roomID, now, mautrix.DirectionBackward)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("timestamp to event: %w", err)
 	}
 
-	ctxResp, err := cli.AdminContext(ctx, roomID, tsToEventResp.EventID, nil, 0)
+	ctxResp, err := it.client.AdminContext(ctx, roomID, tsToEventResp.EventID, nil, 0)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("admin event context: %w", err)
 	}
@@ -57,7 +66,7 @@ func (cli *Client) LastRoomMessageAt(ctx context.Context, roomID id.RoomID) (tim
 			event.EventEncrypted, event.EventReaction,
 		},
 	}
-	messageResp, err := cli.RoomMessages(ctx, roomID, ctxResp.End, "", mautrix.DirectionBackward, filters, 1)
+	messageResp, err := it.client.RoomMessages(ctx, roomID, ctxResp.End, "", mautrix.DirectionBackward, filters, 1)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("room messages: %w", err)
 	}
@@ -69,13 +78,13 @@ func (cli *Client) LastRoomMessageAt(ctx context.Context, roomID id.RoomID) (tim
 	return time.UnixMilli(messageResp.Chunk[0].Timestamp), nil
 }
 
-func (cli *Client) RoomCleanupCandidate(
+func (it *RoomCleanupIterator) candidate(
 	ctx context.Context,
 	roomInfo synapseadmin.RoomInfo,
 	opts RoomCleanupCandidateOptions,
 ) (RoomCleanupCandidate, bool, error) {
 	if roomInfo.JoinedMembers <= 0 {
-		_ = cli.roomActivityCache.StoreRoomActivity(ctx, RoomActivityCacheEntry{
+		_ = it.roomActivityCache.StoreRoomActivity(ctx, RoomActivityCacheEntry{
 			RoomID:        roomInfo.RoomID,
 			LastMessageAt: time.Time{},
 			JoinedMembers: roomInfo.JoinedMembers,
@@ -87,7 +96,7 @@ func (cli *Client) RoomCleanupCandidate(
 		}, true, nil
 	}
 
-	entry, err := cli.roomActivityCache.RoomActivity(ctx, roomInfo.RoomID)
+	entry, err := it.roomActivityCache.RoomActivity(ctx, roomInfo.RoomID)
 	if err == nil && entry != nil {
 		if entry.LastMessageAt.IsZero() {
 			return RoomCleanupCandidate{
@@ -101,12 +110,12 @@ func (cli *Client) RoomCleanupCandidate(
 		}
 	}
 
-	lastMessageAt, err := cli.LastRoomMessageAt(ctx, roomInfo.RoomID)
+	lastMessageAt, err := it.lastRoomMessageAt(ctx, roomInfo.RoomID)
 	if err != nil {
 		return RoomCleanupCandidate{}, false, err
 	}
 
-	_ = cli.roomActivityCache.StoreRoomActivity(ctx, RoomActivityCacheEntry{
+	_ = it.roomActivityCache.StoreRoomActivity(ctx, RoomActivityCacheEntry{
 		RoomID:        roomInfo.RoomID,
 		LastMessageAt: lastMessageAt,
 		JoinedMembers: roomInfo.JoinedMembers,
@@ -130,7 +139,7 @@ func (cli *Client) RoomCleanupCandidate(
 	return RoomCleanupCandidate{}, false, nil
 }
 
-func (cli *Client) CleanupRoomCandidatesIt(
+func (it *RoomCleanupIterator) Iterate(
 	ctx context.Context,
 	opts RoomCleanupCandidateOptions,
 	yield func(ctx context.Context, candidate RoomCleanupCandidate) bool,
@@ -161,7 +170,7 @@ func (cli *Client) CleanupRoomCandidatesIt(
 						opts.OnRoomChecked(ctx, roomInfo)
 					}
 
-					candidate, ok, err := cli.RoomCleanupCandidate(ctx, roomInfo, opts)
+					candidate, ok, err := it.candidate(ctx, roomInfo, opts)
 					if err != nil {
 						if opts.OnRoomError != nil && opts.OnRoomError(ctx, roomInfo, err) {
 							continue
@@ -186,7 +195,7 @@ func (cli *Client) CleanupRoomCandidatesIt(
 	errG.Go(func() error {
 		defer close(jobs)
 
-		return cli.ListRoomsIt(ctx, opts.ListRequest, func(ctx context.Context, roomInfo synapseadmin.RoomInfo) bool {
+		return it.client.ListRoomsIt(ctx, opts.ListRequest, func(ctx context.Context, roomInfo synapseadmin.RoomInfo) bool {
 			select {
 			case <-ctx.Done():
 				return false
