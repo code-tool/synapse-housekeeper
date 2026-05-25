@@ -85,7 +85,7 @@ func (it *RoomCleanupIterator) candidate(
 	ctx context.Context,
 	roomInfo synapseadmin.RoomInfo,
 	opts RoomCleanupCandidateOptions,
-) (RoomCleanupCandidate, bool, error) {
+) (*RoomCleanupCandidate, error) {
 	if roomInfo.JoinedMembers <= 0 {
 		if opts.NoCacheCleanup {
 			_ = it.roomActivityCache.StoreRoomActivity(ctx, RoomActivityCacheEntry{
@@ -95,29 +95,29 @@ func (it *RoomCleanupIterator) candidate(
 			})
 		}
 
-		return RoomCleanupCandidate{
+		return &RoomCleanupCandidate{
 			Room:   roomInfo,
 			Reason: RoomCleanupReasonEmpty,
-		}, true, nil
+		}, nil
 	}
 
 	entry, err := it.roomActivityCache.RoomActivity(ctx, roomInfo.RoomID)
 	if err == nil && entry != nil {
 		if entry.LastMessageAt.IsZero() {
-			return RoomCleanupCandidate{
+			return &RoomCleanupCandidate{
 				Room:   roomInfo,
 				Reason: RoomCleanupReasonNoMessages,
-			}, true, nil
+			}, nil
 		}
 
 		if !entry.LastMessageAt.Before(opts.AbandonedBefore) {
-			return RoomCleanupCandidate{}, false, nil
+			return nil, nil
 		}
 	}
 
 	lastMessageAt, err := it.lastRoomMessageAt(ctx, roomInfo.RoomID)
 	if err != nil {
-		return RoomCleanupCandidate{}, false, err
+		return nil, err
 	}
 
 	if lastMessageAt.IsZero() {
@@ -129,10 +129,10 @@ func (it *RoomCleanupIterator) candidate(
 			})
 		}
 
-		return RoomCleanupCandidate{
+		return &RoomCleanupCandidate{
 			Room:   roomInfo,
 			Reason: RoomCleanupReasonNoMessages,
-		}, true, nil
+		}, nil
 	}
 
 	if lastMessageAt.Before(opts.AbandonedBefore) {
@@ -144,11 +144,11 @@ func (it *RoomCleanupIterator) candidate(
 			})
 		}
 
-		return RoomCleanupCandidate{
+		return &RoomCleanupCandidate{
 			Room:          roomInfo,
 			Reason:        RoomCleanupReasonAbandoned,
 			LastMessageAt: lastMessageAt,
-		}, true, nil
+		}, nil
 	}
 
 	_ = it.roomActivityCache.StoreRoomActivity(ctx, RoomActivityCacheEntry{
@@ -157,7 +157,7 @@ func (it *RoomCleanupIterator) candidate(
 		JoinedMembers: roomInfo.JoinedMembers,
 	})
 
-	return RoomCleanupCandidate{}, false, nil
+	return nil, nil
 }
 
 func (it *RoomCleanupIterator) Iterate(
@@ -191,7 +191,7 @@ func (it *RoomCleanupIterator) Iterate(
 						opts.OnRoomChecked(ctx, roomInfo)
 					}
 
-					candidate, ok, err := it.candidate(ctx, roomInfo, opts)
+					candidate, err := it.candidate(ctx, roomInfo, opts)
 					if err != nil {
 						if opts.OnRoomError != nil && opts.OnRoomError(ctx, roomInfo, err) {
 							continue
@@ -199,14 +199,14 @@ func (it *RoomCleanupIterator) Iterate(
 
 						return fmt.Errorf("check room %s: %w", roomInfo.RoomID, err)
 					}
-					if !ok {
+					if candidate == nil {
 						continue
 					}
 
 					select {
 					case <-ctx.Done():
 						return nil
-					case candidates <- candidate:
+					case candidates <- *candidate:
 					}
 				}
 			}
