@@ -1,4 +1,4 @@
 .idea/
 .env
-
+docs/superpowers/
 ./cmd/debug.go
