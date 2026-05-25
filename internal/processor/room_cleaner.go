@@ -11,7 +11,6 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 	"maunium.net/go/mautrix"
-	"maunium.net/go/mautrix/id"
 	"maunium.net/go/mautrix/synapseadmin"
 
 	"synapse-housekeeper/internal/synapse"
@@ -36,20 +35,22 @@ func NewRoomCleaner(log *zap.Logger, synapseClient *synapse.Client, workersCount
 	return &RoomCleaner{log: log, synapseClient: synapseClient, workersCount: workersCount}
 }
 
-func (r *RoomCleaner) purgeRoom(ctx context.Context, doRealJob bool, roomId id.RoomID) error {
+func (r *RoomCleaner) purgeRoom(ctx context.Context, doRealJob bool, roomInfo *synapseadmin.RoomInfo) error {
 	if !doRealJob {
 		return nil
 	}
 
-	r.log.Info("deleting room", zap.Stringer("room_id", roomId))
+	r.log.Info("deleting room",
+		zap.Stringer("room_id", roomInfo.RoomID),
+		zap.Int("joined_members", roomInfo.JoinedMembers))
 
-	_, err := r.synapseClient.DeleteRoom(ctx, roomId, synapseadmin.ReqDeleteRoom{Purge: true})
+	_, err := r.synapseClient.DeleteRoom(ctx, roomInfo.RoomID, synapseadmin.ReqDeleteRoom{Purge: true})
 	if err == nil {
 		return nil
 	}
 
 	if httpErr, ok := errors.AsType[mautrix.HTTPError](err); ok && httpErr.IsStatus(400) {
-		if dStatusResp, err := r.synapseClient.DeleteStatus(ctx, roomId); err == nil {
+		if dStatusResp, err := r.synapseClient.DeleteStatus(ctx, roomInfo.RoomID); err == nil {
 			r.log.Warn("room delete already scheduled", zap.String("status", dStatusResp.Results[0].Status))
 		}
 		return nil
@@ -65,13 +66,13 @@ func (r *RoomCleaner) recordCandidate(stat *RoomCleanerStatistics, candidate syn
 
 	case synapse.RoomCleanupReasonNoMessages:
 		atomic.AddInt64(&stat.NoMessages, 1)
-		r.log.Info("Room without messages",
+		r.log.Debug("Room without messages",
 			zap.Stringer("room_id", candidate.Room.RoomID),
 			zap.Int("joined_members", candidate.Room.JoinedMembers),
 		)
 
 	case synapse.RoomCleanupReasonAbandoned:
-		r.log.Info("found abandoned room",
+		r.log.Debug("found abandoned room",
 			zap.Stringer("room_id", candidate.Room.RoomID),
 			zap.Int("joined_members", candidate.Room.JoinedMembers),
 			zap.String("since_last_event", humanize.Time(candidate.LastMessageAt)),
@@ -101,7 +102,7 @@ func (r *RoomCleaner) worker(
 
 			r.recordCandidate(stat, candidate)
 
-			if err := r.purgeRoom(ctx, doRealJob, candidate.Room.RoomID); err != nil {
+			if err := r.purgeRoom(ctx, doRealJob, &candidate.Room); err != nil {
 				return err
 			}
 		}
@@ -151,7 +152,7 @@ func (r *RoomCleaner) Process(ctx context.Context, doRealJob bool) error {
 	}()
 
 	const day = 24 * time.Hour
-	abandonedBefore := time.Now().Add(-(365 + 45) * day)
+	abandonedBefore := time.Now().Add(-(365 + 31*3) * day)
 
 	itErr := r.synapseClient.CleanupRoomCandidatesIt(ctx, synapse.RoomCleanupCandidateOptions{
 		AbandonedBefore: abandonedBefore,
