@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 	"maunium.net/go/mautrix"
+	"maunium.net/go/mautrix/id"
 	"maunium.net/go/mautrix/synapseadmin"
 
 	"synapse-housekeeper/internal/synapse"
@@ -18,10 +19,23 @@ import (
 
 type RoomCleaner struct {
 	log           *zap.Logger
-	synapseClient *synapse.Client
-	iterator      *synapse.RoomCleanupIterator
+	synapseClient roomCleanerClient
+	iterator      roomCleanupIterator
 
 	workersCount int
+}
+
+type roomCleanerClient interface {
+	DeleteRoom(ctx context.Context, roomID id.RoomID, req synapseadmin.ReqDeleteRoom) (synapseadmin.RespDeleteRoom, error)
+	DeleteStatus(ctx context.Context, roomID id.RoomID) (synapse.RespDeleteStatus, error)
+}
+
+type roomCleanupIterator interface {
+	Iterate(
+		ctx context.Context,
+		opts synapse.RoomCleanupCandidateOptions,
+		yield func(ctx context.Context, candidate synapse.RoomCleanupCandidate) bool,
+	) error
 }
 
 type RoomCleanerStatistics struct {
@@ -32,7 +46,7 @@ type RoomCleanerStatistics struct {
 	AbandonedMulti  int64
 }
 
-func NewRoomCleaner(log *zap.Logger, synapseClient *synapse.Client, iterator *synapse.RoomCleanupIterator, workersCount int) *RoomCleaner {
+func NewRoomCleaner(log *zap.Logger, synapseClient roomCleanerClient, iterator roomCleanupIterator, workersCount int) *RoomCleaner {
 	return &RoomCleaner{log: log, synapseClient: synapseClient, iterator: iterator, workersCount: workersCount}
 }
 
@@ -52,9 +66,11 @@ func (r *RoomCleaner) purgeRoom(ctx context.Context, doRealJob bool, roomInfo *s
 
 	if httpErr, ok := errors.AsType[mautrix.HTTPError](err); ok && httpErr.IsStatus(400) {
 		if dStatusResp, err := r.synapseClient.DeleteStatus(ctx, roomInfo.RoomID); err == nil {
-			r.log.Warn("room delete already scheduled", zap.String("status", dStatusResp.Results[0].Status))
+			if len(dStatusResp.Results) > 0 {
+				r.log.Warn("room delete already scheduled", zap.String("status", dStatusResp.Results[0].Status))
+				return nil
+			}
 		}
-		return nil
 	}
 
 	return fmt.Errorf("can't delete room: %w", err)

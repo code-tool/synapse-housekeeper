@@ -17,10 +17,16 @@ import (
 type DeviceCleaner struct {
 	log *zap.Logger
 
-	synapseClient *synapse.Client
+	synapseClient deviceCleanerClient
 }
 
-func NewDeviceCleaner(log *zap.Logger, synapseClient *synapse.Client) *DeviceCleaner {
+type deviceCleanerClient interface {
+	ListUsers(ctx context.Context, req synapse.ReqListUsers) (resp *synapse.RespListUsers, err error)
+	ListDevices(ctx context.Context, userID id.UserID) (resp *synapseadmin.RespListDevices, err error)
+	DeleteUserDevice(ctx context.Context, userID id.UserID, deviceID id.DeviceID) error
+}
+
+func NewDeviceCleaner(log *zap.Logger, synapseClient deviceCleanerClient) *DeviceCleaner {
 	return &DeviceCleaner{log: log, synapseClient: synapseClient}
 }
 
