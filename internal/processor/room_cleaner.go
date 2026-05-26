@@ -39,11 +39,12 @@ type roomCleanupIterator interface {
 }
 
 type RoomCleanerStatistics struct {
-	Processed       int64
-	Empty           int64
-	NoMessages      int64
-	AbandonedSingle int64
-	AbandonedMulti  int64
+	Processed     int64
+	Empty         int64
+	NoMessages    int64
+	AbandonedOne  int64
+	AbandonedPair int64
+	AbandonedMany int64
 }
 
 func NewRoomCleaner(log *zap.Logger, synapseClient roomCleanerClient, iterator roomCleanupIterator, workersCount int) *RoomCleaner {
@@ -95,10 +96,15 @@ func (r *RoomCleaner) recordCandidate(stat *RoomCleanerStatistics, candidate syn
 			zap.String("since_last_event", humanize.Time(candidate.LastMessageAt)),
 		)
 
-		if candidate.Room.JoinedMembers > 1 {
-			atomic.AddInt64(&stat.AbandonedMulti, 1)
-		} else {
-			atomic.AddInt64(&stat.AbandonedSingle, 1)
+		switch candidate.Room.JoinedMembers {
+		case 0:
+			panic("joined_members == 0 in abandoned room")
+		case 1:
+			atomic.AddInt64(&stat.AbandonedOne, 1)
+		case 2:
+			atomic.AddInt64(&stat.AbandonedPair, 1)
+		default:
+			atomic.AddInt64(&stat.AbandonedMany, 1)
 		}
 	}
 }
@@ -133,8 +139,11 @@ func (r *RoomCleaner) Process(ctx context.Context, doRealJob bool, abandonedBefo
 			zap.Int64("processed", atomic.LoadInt64(&stat.Processed)),
 			zap.Int64("empty", atomic.LoadInt64(&stat.Empty)),
 			zap.Int64("no_messages", atomic.LoadInt64(&stat.NoMessages)),
-			zap.Int64("abandoned_single", atomic.LoadInt64(&stat.AbandonedSingle)),
-			zap.Int64("abandoned_multi", atomic.LoadInt64(&stat.AbandonedMulti)),
+			zap.Object("abandoned", zap.DictObject(
+				zap.Int64("one", atomic.LoadInt64(&stat.AbandonedOne)),
+				zap.Int64("pair", atomic.LoadInt64(&stat.AbandonedPair)),
+				zap.Int64("many", atomic.LoadInt64(&stat.AbandonedMany)),
+			)),
 		)
 	}
 	defer logStats()
