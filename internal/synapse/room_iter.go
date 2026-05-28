@@ -28,12 +28,16 @@ type RoomCleanupCandidate struct {
 }
 
 type RoomCleanupCandidateOptions struct {
-	AbandonedBefore time.Time
-	Workers         int
+	// Filtering rules
+	AbandonedBefore     time.Time
+	FilterOnlyForUserID id.UserID
+
 	// NoCacheCleanup disables candidate eviction: candidates are written to cache
 	// and DeleteCandidateEntries is not called. Use for analytics runs before real deletion.
 	NoCacheCleanup bool
 
+	//
+	Workers       int
 	OnRoomChecked func(ctx context.Context, roomInfo synapseadmin.RoomInfo)
 
 	// OnRoomError is called when a single room can't be checked. Return true to
@@ -198,7 +202,7 @@ func (it *RoomCleanupIterator) workerFn(
 	}
 }
 
-func (it *RoomCleanupIterator) emmitRoomsGlobal(ctx context.Context, jobs chan synapseadmin.RoomInfo) error {
+func (it *RoomCleanupIterator) emitRoomsGlobal(ctx context.Context, jobs chan synapseadmin.RoomInfo) error {
 	listReq := synapseadmin.ReqListRoom{
 		Direction: mautrix.DirectionBackward,
 		OrderBy:   "joined_members",
@@ -213,6 +217,35 @@ func (it *RoomCleanupIterator) emmitRoomsGlobal(ctx context.Context, jobs chan s
 			return true
 		}
 	})
+}
+
+func (it *RoomCleanupIterator) emitRoomsForUser(ctx context.Context, userID id.UserID, jobs chan synapseadmin.RoomInfo) error {
+	resp, err := it.client.AdminUserJoinedRooms(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("admin user joined rooms: %w", err)
+	}
+
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(4)
+
+	for _, roomID := range resp.JoinedRooms {
+		g.Go(func() error {
+			roomInfo, err := it.client.RoomInfo(gCtx, roomID)
+			if err != nil {
+				return fmt.Errorf("room info for %s: %w", roomID, err)
+			}
+
+			select {
+			case jobs <- roomInfo:
+			case <-gCtx.Done():
+				return gCtx.Err()
+			}
+
+			return nil
+		})
+	}
+
+	return g.Wait()
 }
 
 func (it *RoomCleanupIterator) Iterate(
@@ -241,7 +274,11 @@ func (it *RoomCleanupIterator) Iterate(
 	errG.Go(func() error {
 		defer close(jobs)
 
-		return it.emmitRoomsGlobal(ctx, jobs)
+		if opts.FilterOnlyForUserID != "" {
+			return it.emitRoomsForUser(ctx, opts.FilterOnlyForUserID, jobs)
+		}
+
+		return it.emitRoomsGlobal(ctx, jobs)
 	})
 
 	waitErrCh := make(chan error, 1)

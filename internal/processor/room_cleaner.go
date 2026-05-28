@@ -78,23 +78,23 @@ func (r *RoomCleaner) purgeRoom(ctx context.Context, doRealJob bool, roomInfo *s
 }
 
 func (r *RoomCleaner) recordCandidate(stat *RoomCleanerStatistics, candidate synapse.RoomCleanupCandidate) {
+	log := r.log.With(zap.Stringer("room_id", candidate.Room.RoomID))
+	if candidate.Room.Name != "" {
+		log = log.With(zap.String("room_name", candidate.Room.Name))
+	}
+	log = log.With(zap.Int("joined_members", candidate.Room.JoinedMembers))
+
 	switch candidate.Reason {
 	case synapse.RoomCleanupReasonEmpty:
 		atomic.AddInt64(&stat.Empty, 1)
+		log.Debug("Empty room")
 
 	case synapse.RoomCleanupReasonNoMessages:
 		atomic.AddInt64(&stat.NoMessages, 1)
-		r.log.Debug("Room without messages",
-			zap.Stringer("room_id", candidate.Room.RoomID),
-			zap.Int("joined_members", candidate.Room.JoinedMembers),
-		)
+		log.Debug("Room without messages")
 
 	case synapse.RoomCleanupReasonAbandoned:
-		r.log.Debug("found abandoned room",
-			zap.Stringer("room_id", candidate.Room.RoomID),
-			zap.Int("joined_members", candidate.Room.JoinedMembers),
-			zap.String("since_last_event", humanize.Time(candidate.LastMessageAt)),
-		)
+		log.Debug("Abandoned room", zap.String("since_last_event", humanize.Time(candidate.LastMessageAt)))
 
 		switch candidate.Room.JoinedMembers {
 		case 0:
@@ -132,7 +132,14 @@ func (r *RoomCleaner) worker(
 	}
 }
 
-func (r *RoomCleaner) Process(ctx context.Context, doRealJob bool, abandonedBefore time.Time, noCacheCleanup bool) error {
+type RoomCleanerOptions struct {
+	DoRealJob           bool
+	AbandonedBefore     time.Time
+	NoCacheCleanup      bool
+	FilterOnlyForUserID id.UserID
+}
+
+func (r *RoomCleaner) Process(ctx context.Context, opts RoomCleanerOptions) error {
 	stat := &RoomCleanerStatistics{}
 	logStats := func() {
 		r.log.Info("statistics",
@@ -153,7 +160,7 @@ func (r *RoomCleaner) Process(ctx context.Context, doRealJob bool, abandonedBefo
 
 	for i := 0; i < r.workersCount; i++ {
 		errG.Go(func() error {
-			return r.worker(ctx, doRealJob, stat, roomInfoChan)
+			return r.worker(ctx, opts.DoRealJob, stat, roomInfoChan)
 		})
 	}
 
@@ -172,9 +179,10 @@ func (r *RoomCleaner) Process(ctx context.Context, doRealJob bool, abandonedBefo
 	}()
 
 	itErr := r.iterator.Iterate(ctx, synapse.RoomCleanupCandidateOptions{
-		AbandonedBefore: abandonedBefore,
-		NoCacheCleanup:  noCacheCleanup,
-		Workers:         r.workersCount,
+		AbandonedBefore:     opts.AbandonedBefore,
+		NoCacheCleanup:      opts.NoCacheCleanup,
+		Workers:             r.workersCount,
+		FilterOnlyForUserID: opts.FilterOnlyForUserID,
 		OnRoomChecked: func(ctx context.Context, roomInfo synapseadmin.RoomInfo) {
 			atomic.AddInt64(&stat.Processed, 1)
 		},

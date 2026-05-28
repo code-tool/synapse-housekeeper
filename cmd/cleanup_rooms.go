@@ -20,6 +20,7 @@ type CleanupRoomsCmdConfig struct {
 	WorkersCount         int    `mapstructure:"workers-count"`
 	AbandonedDays        int    `mapstructure:"abandoned-days"`
 	NoCacheCleanup       bool   `mapstructure:"no-cache-cleanup"`
+	FilterOnlyForUserID  string `mapstructure:"filter-only-for-user-id"`
 }
 
 var cleanupRoomsCmd = &cobra.Command{
@@ -59,7 +60,12 @@ var cleanupRoomsCmd = &cobra.Command{
 		iterator := synapse.NewRoomCleanupIterator(synapseClient, activityCache)
 
 		return processor.NewRoomCleaner(logger, synapseClient, iterator, cfg.WorkersCount).
-			Process(cmd.Context(), doRealJob, abandonedBefore, cfg.NoCacheCleanup)
+			Process(cmd.Context(), processor.RoomCleanerOptions{
+				DoRealJob:           doRealJob,
+				AbandonedBefore:     abandonedBefore,
+				NoCacheCleanup:      cfg.NoCacheCleanup,
+				FilterOnlyForUserID: id.UserID(cfg.FilterOnlyForUserID),
+			})
 	},
 }
 
@@ -68,10 +74,12 @@ func init() {
 	cleanupRoomsCmd.Flags().String("synapse-user-id", "", "Synapse UserID")
 	cleanupRoomsCmd.Flags().String("synapse-access-token", "", "Synapse Access Token")
 	cleanupRoomsCmd.Flags().String("postgres-dsn", "", "PostgreSQL DSN for room activity cache")
-	cleanupRoomsCmd.Flags().Int("workers-count", 4, "Number of room cleanup workers")
-	cleanupRoomsCmd.Flags().Int("abandoned-days", 458, "Rooms with no messages for this many days are cleanup candidates")
-	cleanupRoomsCmd.Flags().Bool("no-cache-cleanup", false, "Write candidates to cache and skip eviction (for analytics before real deletion)")
 
+	cleanupRoomsCmd.Flags().Int("abandoned-days", 458, "Rooms with no messages for this many days are cleanup candidates")
+	cleanupRoomsCmd.Flags().String("filter-only-for-user-id", "", "When set, only check rooms joined by this user ID")
+
+	cleanupRoomsCmd.Flags().Int("workers-count", 4, "Number of room cleanup workers")
+	cleanupRoomsCmd.Flags().Bool("no-cache-cleanup", false, "Write candidates to cache and skip eviction (for analytics before real deletion)")
 	cleanupRoomsCmd.Flags().Bool("do-real-job", false, "Without this flag to action will be performed")
 
 	rootCmd.AddCommand(cleanupRoomsCmd)
