@@ -159,6 +159,62 @@ func (it *RoomCleanupIterator) candidate(
 	return nil, nil
 }
 
+func (it *RoomCleanupIterator) workerFn(
+	ctx context.Context,
+	opts RoomCleanupCandidateOptions,
+	jobs chan synapseadmin.RoomInfo,
+	candidates chan RoomCleanupCandidate,
+) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case roomInfo, ok := <-jobs:
+			if !ok {
+				return nil
+			}
+			if opts.OnRoomChecked != nil {
+				opts.OnRoomChecked(ctx, roomInfo)
+			}
+
+			candidate, err := it.candidate(ctx, roomInfo, opts)
+			if err != nil {
+				if opts.OnRoomError != nil && opts.OnRoomError(ctx, roomInfo, err) {
+					continue
+				}
+
+				return fmt.Errorf("check room %s: %w", roomInfo.RoomID, err)
+			}
+			if candidate == nil {
+				continue
+			}
+
+			select {
+			case <-ctx.Done():
+				return nil
+			case candidates <- *candidate:
+			}
+		}
+	}
+}
+
+func (it *RoomCleanupIterator) emmitRoomsGlobal(ctx context.Context, jobs chan synapseadmin.RoomInfo) error {
+	listReq := synapseadmin.ReqListRoom{
+		Direction: mautrix.DirectionBackward,
+		OrderBy:   "joined_members",
+		Limit:     1000,
+	}
+
+	return it.client.ListRoomsIt(ctx, listReq, func(ctx context.Context, roomInfo synapseadmin.RoomInfo) bool {
+		select {
+		case <-ctx.Done():
+			return false
+		case jobs <- roomInfo:
+			return true
+		}
+	})
+}
+
 func (it *RoomCleanupIterator) Iterate(
 	ctx context.Context,
 	opts RoomCleanupCandidateOptions,
@@ -178,56 +234,14 @@ func (it *RoomCleanupIterator) Iterate(
 
 	for range workers {
 		errG.Go(func() error {
-			for {
-				select {
-				case <-ctx.Done():
-					return nil
-				case roomInfo, ok := <-jobs:
-					if !ok {
-						return nil
-					}
-					if opts.OnRoomChecked != nil {
-						opts.OnRoomChecked(ctx, roomInfo)
-					}
-
-					candidate, err := it.candidate(ctx, roomInfo, opts)
-					if err != nil {
-						if opts.OnRoomError != nil && opts.OnRoomError(ctx, roomInfo, err) {
-							continue
-						}
-
-						return fmt.Errorf("check room %s: %w", roomInfo.RoomID, err)
-					}
-					if candidate == nil {
-						continue
-					}
-
-					select {
-					case <-ctx.Done():
-						return nil
-					case candidates <- *candidate:
-					}
-				}
-			}
+			return it.workerFn(ctx, opts, jobs, candidates)
 		})
 	}
 
 	errG.Go(func() error {
 		defer close(jobs)
 
-		listReq := synapseadmin.ReqListRoom{
-			Direction: mautrix.DirectionBackward,
-			OrderBy:   "joined_members",
-			Limit:     1000,
-		}
-		return it.client.ListRoomsIt(ctx, listReq, func(ctx context.Context, roomInfo synapseadmin.RoomInfo) bool {
-			select {
-			case <-ctx.Done():
-				return false
-			case jobs <- roomInfo:
-				return true
-			}
-		})
+		return it.emmitRoomsGlobal(ctx, jobs)
 	})
 
 	waitErrCh := make(chan error, 1)
