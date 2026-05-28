@@ -115,6 +115,21 @@ func (cli *Client) ListUsers(ctx context.Context, req ReqListUsers) (resp *RespL
 	return
 }
 
+type RespJoinedRooms struct {
+	JoinedRooms []id.RoomID `json:"joined_rooms"`
+	Total       int         `json:"total"`
+}
+
+func (cli *Client) AdminUserJoinedRooms(ctx context.Context, userID id.UserID) (resp *RespJoinedRooms, err error) {
+	_, err = cli.MakeFullRequest(ctx, mautrix.FullRequest{
+		Method: http.MethodGet,
+		URL:    cli.BuildAdminURL("v1", "users", userID, "joined_rooms"),
+
+		ResponseJSON: &resp,
+	})
+	return
+}
+
 // DeleteUserDevice Deletes the given device_id for a specific user_id, and invalidates any access token associated with it.
 //
 // https://element-hq.github.io/synapse/latest/admin_api/user_admin_api.html#delete-a-device
