@@ -179,7 +179,9 @@ func (r *RoomCleaner) Process(ctx context.Context, doRealJob bool, abandonedBefo
 			atomic.AddInt64(&stat.Processed, 1)
 		},
 		OnRoomError: func(ctx context.Context, roomInfo synapseadmin.RoomInfo, err error) bool {
-			r.log.Error("Failed to check room status", zap.String("room_id", string(roomInfo.RoomID)), zap.Error(err))
+			if !errors.Is(err, context.Canceled) {
+				r.log.Error("Failed to check room status", zap.String("room_id", string(roomInfo.RoomID)), zap.Error(err))
+			}
 
 			return true
 		},
