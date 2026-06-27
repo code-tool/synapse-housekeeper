@@ -175,6 +175,37 @@ func (cli *Client) RoomInfo(ctx context.Context, roomID id.RoomID) (resp synapse
 	return
 }
 
+// reqDeleteRoom mirrors synapseadmin.ReqDeleteRoom but serializes Purge without
+// omitempty. Synapse interprets a missing "purge" field as true, so the upstream
+// `json:"purge,omitempty"` tag silently turns a Purge=false request into a full
+// purge — which breaks sync for rooms that still have joined members.
+type reqDeleteRoom struct {
+	Purge         bool      `json:"purge"`
+	ForcePurge    bool      `json:"force_purge,omitempty"`
+	Block         bool      `json:"block,omitempty"`
+	Message       string    `json:"message,omitempty"`
+	RoomName      string    `json:"room_name,omitempty"`
+	NewRoomUserID id.UserID `json:"new_room_user_id,omitempty"`
+}
+
+// DeleteRoom overrides synapseadmin.Client.DeleteRoom to always send the "purge"
+// field explicitly. See reqDeleteRoom for why the upstream method is unsafe.
+func (cli *Client) DeleteRoom(ctx context.Context, roomID id.RoomID, req synapseadmin.ReqDeleteRoom) (synapseadmin.RespDeleteRoom, error) {
+	body := reqDeleteRoom{
+		Purge:         req.Purge,
+		ForcePurge:    req.ForcePurge,
+		Block:         req.Block,
+		Message:       req.Message,
+		RoomName:      req.RoomName,
+		NewRoomUserID: req.NewRoomUserID,
+	}
+
+	var resp synapseadmin.RespDeleteRoom
+	_, err := cli.MakeRequest(ctx, http.MethodDelete, cli.BuildAdminURL("v2", "rooms", roomID), &body, &resp)
+
+	return resp, err
+}
+
 type DeleteStatus struct {
 	DeleteID     string `json:"delete_id"`
 	Status       string `json:"status"`

@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
+	"maunium.net/go/mautrix/synapseadmin"
 )
 
 func newTestClient(t *testing.T, handler http.HandlerFunc) *Client {
@@ -92,6 +94,55 @@ func TestClientDeleteUserDeviceUsesAdminEndpoint(t *testing.T) {
 
 	if err := client.DeleteUserDevice(ctx, id.UserID("@user:test"), id.DeviceID("DEVICE")); err != nil {
 		t.Fatalf("DeleteUserDevice() error = %v", err)
+	}
+}
+
+func TestClientDeleteRoomSendsPurgeExplicitly(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name      string
+		purge     bool
+		wantPurge bool
+	}{
+		{name: "purge false is sent, not omitted", purge: false, wantPurge: false},
+		{name: "purge true is sent", purge: true, wantPurge: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodDelete {
+					t.Fatalf("method = %s, want %s", r.Method, http.MethodDelete)
+				}
+				if !strings.HasPrefix(r.URL.Path, "/_synapse/admin/v2/rooms/") {
+					t.Fatalf("path = %s", r.URL.Path)
+				}
+
+				var body map[string]json.RawMessage
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatalf("decode body: %v", err)
+				}
+				raw, ok := body["purge"]
+				if !ok {
+					t.Fatalf("purge field missing from request body %v", body)
+				}
+				if string(raw) != strconv.FormatBool(tt.wantPurge) {
+					t.Fatalf("purge = %s, want %v", raw, tt.wantPurge)
+				}
+
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"delete_id":"delete-id"}`))
+			})
+
+			resp, err := client.DeleteRoom(ctx, id.RoomID("!room:test"), synapseadmin.ReqDeleteRoom{Purge: tt.purge})
+			if err != nil {
+				t.Fatalf("DeleteRoom() error = %v", err)
+			}
+			if resp.DeleteID != "delete-id" {
+				t.Fatalf("DeleteID = %q, want %q", resp.DeleteID, "delete-id")
+			}
+		})
 	}
 }
 
