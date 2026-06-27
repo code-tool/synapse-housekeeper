@@ -113,11 +113,11 @@ func (r *RoomCleaner) purgeRoom(
 			return nil
 		}
 
-		if err := r.deleteRoom(ctx, roomInfo.RoomID, false); err != nil {
-			return err
-		}
 		if err := r.purgeSchedule.Schedule(ctx, roomInfo.RoomID, now.Add(cooldown)); err != nil {
 			return fmt.Errorf("schedule purge: %w", err)
+		}
+		if err := r.deleteRoom(ctx, roomInfo.RoomID, false); err != nil {
+			return err
 		}
 		atomic.AddInt64(&stat.SoftDeleted, 1)
 
