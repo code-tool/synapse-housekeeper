@@ -21,7 +21,7 @@ type RoomCleaner struct {
 	log           *zap.Logger
 	synapseClient roomCleanerClient
 	iterator      roomCleanupIterator
-	purgeSchedule synapse.RoomPurgeScheduleStore
+	purgeSchedule RoomPurgeScheduleStore
 
 	now func() time.Time
 
@@ -53,7 +53,7 @@ type RoomCleanerStatistics struct {
 	Purged          int64
 }
 
-func NewRoomCleaner(log *zap.Logger, synapseClient roomCleanerClient, iterator roomCleanupIterator, purgeSchedule synapse.RoomPurgeScheduleStore, workersCount int) *RoomCleaner {
+func NewRoomCleaner(log *zap.Logger, synapseClient roomCleanerClient, iterator roomCleanupIterator, purgeSchedule RoomPurgeScheduleStore, workersCount int) *RoomCleaner {
 	return &RoomCleaner{
 		log:           log,
 		synapseClient: synapseClient,

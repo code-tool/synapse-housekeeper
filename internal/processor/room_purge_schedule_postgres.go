@@ -1,4 +1,4 @@
-package synapse
+package processor
 
 import (
 	"context"

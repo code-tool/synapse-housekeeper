@@ -38,32 +38,6 @@ func (f *fakeRoomCleanerClient) DeleteStatus(ctx context.Context, roomID id.Room
 	return f.statusResp, f.statusErr
 }
 
-type fakePurgeSchedule struct {
-	record *synapse.RoomPurgeSchedule
-	getErr error
-
-	scheduleCalls  int
-	lastScheduleAt time.Time
-	deleteCalls    int
-}
-
-func (f *fakePurgeSchedule) Get(ctx context.Context, roomID id.RoomID) (*synapse.RoomPurgeSchedule, error) {
-	return f.record, f.getErr
-}
-
-func (f *fakePurgeSchedule) Schedule(ctx context.Context, roomID id.RoomID, purgeAfter time.Time) error {
-	f.scheduleCalls++
-	f.lastScheduleAt = purgeAfter
-
-	return nil
-}
-
-func (f *fakePurgeSchedule) Delete(ctx context.Context, roomID id.RoomID) error {
-	f.deleteCalls++
-
-	return nil
-}
-
 func TestRoomCleanerDeleteRoom(t *testing.T) {
 	httpBadRequestErr := mautrix.HTTPError{Response: &http.Response{StatusCode: http.StatusBadRequest}}
 
@@ -100,7 +74,7 @@ func TestRoomCleanerDeleteRoom(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			client := tt.client
-			cleaner := NewRoomCleaner(zap.NewNop(), &client, nil, &fakePurgeSchedule{}, 1)
+			cleaner := NewRoomCleaner(zap.NewNop(), &client, nil, NewRoomPurgeScheduleMemory(), 1)
 
 			err := cleaner.deleteRoom(context.Background(), "!room:test", true)
 			if (err != nil) != tt.wantErr {
@@ -117,54 +91,62 @@ func TestRoomCleanerDeleteRoom(t *testing.T) {
 }
 
 func TestRoomCleanerPurgeRoom(t *testing.T) {
+	const roomID = id.RoomID("!room:test")
 	now := time.Date(2026, 6, 27, 12, 0, 0, 0, time.UTC)
 	cooldown := 7 * 24 * time.Hour
 
 	tests := []struct {
-		name             string
-		doRealJob        bool
-		joinedMembers    int
-		record           *synapse.RoomPurgeSchedule
-		wantDeleteCalls  int
-		wantPurge        bool
-		wantScheduleCall bool
-		wantScheduleAt   time.Time
-		wantSchedDelete  int
-		wantSoftDeleted  int64
-		wantCooldownSkip int64
-		wantPurged       int64
+		name           string
+		doRealJob      bool
+		joinedMembers  int
+		seedRecord     bool
+		seedPurgeAfter time.Time
+
+		wantDeleteCalls      int
+		wantPurge            bool
+		wantRecord           bool
+		wantRecordPurgeAfter time.Time
+		wantSoftDeleted      int64
+		wantCooldownSkip     int64
+		wantPurged           int64
 	}{
 		{
-			name:             "members present and unscheduled soft-deletes",
-			doRealJob:        true,
-			joinedMembers:    2,
-			wantDeleteCalls:  1,
-			wantPurge:        false,
-			wantScheduleCall: true,
-			wantScheduleAt:   now.Add(cooldown),
-			wantSoftDeleted:  1,
+			name:                 "members present and unscheduled soft-deletes",
+			doRealJob:            true,
+			joinedMembers:        2,
+			wantDeleteCalls:      1,
+			wantPurge:            false,
+			wantRecord:           true,
+			wantRecordPurgeAfter: now.Add(cooldown),
+			wantSoftDeleted:      1,
 		},
 		{
-			name:          "members present but already scheduled skips",
-			doRealJob:     true,
-			joinedMembers: 2,
-			record:        &synapse.RoomPurgeSchedule{RoomID: "!room:test", PurgeAfter: now.Add(time.Hour)},
+			name:                 "members present but already scheduled skips",
+			doRealJob:            true,
+			joinedMembers:        2,
+			seedRecord:           true,
+			seedPurgeAfter:       now.Add(time.Hour),
+			wantRecord:           true,
+			wantRecordPurgeAfter: now.Add(time.Hour),
 		},
 		{
-			name:             "empty within cooldown skips",
-			doRealJob:        true,
-			joinedMembers:    0,
-			record:           &synapse.RoomPurgeSchedule{RoomID: "!room:test", PurgeAfter: now.Add(time.Hour)},
-			wantCooldownSkip: 1,
+			name:                 "empty within cooldown skips",
+			doRealJob:            true,
+			joinedMembers:        0,
+			seedRecord:           true,
+			seedPurgeAfter:       now.Add(time.Hour),
+			wantRecord:           true,
+			wantRecordPurgeAfter: now.Add(time.Hour),
+			wantCooldownSkip:     1,
 		},
 		{
 			name:            "empty after cooldown purges and clears schedule",
 			doRealJob:       true,
 			joinedMembers:   0,
-			record:          &synapse.RoomPurgeSchedule{RoomID: "!room:test", PurgeAfter: now.Add(-time.Hour)},
+			seedRecord:      true,
+			seedPurgeAfter:  now.Add(-time.Hour),
 			wantDeleteCalls: 1,
 			wantPurge:       true,
-			wantSchedDelete: 1,
 			wantPurged:      1,
 		},
 		{
@@ -184,14 +166,20 @@ func TestRoomCleanerPurgeRoom(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
 			client := &fakeRoomCleanerClient{}
-			schedule := &fakePurgeSchedule{record: tt.record}
+			schedule := NewRoomPurgeScheduleMemory()
+			if tt.seedRecord {
+				if err := schedule.Schedule(ctx, roomID, tt.seedPurgeAfter); err != nil {
+					t.Fatalf("seed Schedule() error = %v", err)
+				}
+			}
 			cleaner := NewRoomCleaner(zap.NewNop(), client, nil, schedule, 1)
 			cleaner.now = func() time.Time { return now }
 			stat := &RoomCleanerStatistics{}
-			room := &synapseadmin.RoomInfo{RoomID: "!room:test", JoinedMembers: tt.joinedMembers}
+			room := &synapseadmin.RoomInfo{RoomID: roomID, JoinedMembers: tt.joinedMembers}
 
-			if err := cleaner.purgeRoom(context.Background(), tt.doRealJob, cooldown, stat, room); err != nil {
+			if err := cleaner.purgeRoom(ctx, tt.doRealJob, cooldown, stat, room); err != nil {
 				t.Fatalf("purgeRoom() error = %v", err)
 			}
 
@@ -201,19 +189,22 @@ func TestRoomCleanerPurgeRoom(t *testing.T) {
 			if len(client.deleteReqs) > 0 && client.deleteReqs[0].Purge != tt.wantPurge {
 				t.Fatalf("DeleteRoom purge = %v, want %v", client.deleteReqs[0].Purge, tt.wantPurge)
 			}
-			wantScheduleCalls := 0
-			if tt.wantScheduleCall {
-				wantScheduleCalls = 1
+
+			rec, err := schedule.Get(ctx, roomID)
+			if err != nil {
+				t.Fatalf("schedule Get() error = %v", err)
 			}
-			if schedule.scheduleCalls != wantScheduleCalls {
-				t.Fatalf("Schedule calls = %d, want %d", schedule.scheduleCalls, wantScheduleCalls)
+			if tt.wantRecord {
+				if rec == nil {
+					t.Fatalf("schedule record = nil, want PurgeAfter %v", tt.wantRecordPurgeAfter)
+				}
+				if !rec.PurgeAfter.Equal(tt.wantRecordPurgeAfter) {
+					t.Fatalf("schedule PurgeAfter = %v, want %v", rec.PurgeAfter, tt.wantRecordPurgeAfter)
+				}
+			} else if rec != nil {
+				t.Fatalf("schedule record = %v, want none", rec)
 			}
-			if tt.wantScheduleCall && !schedule.lastScheduleAt.Equal(tt.wantScheduleAt) {
-				t.Fatalf("Schedule purgeAfter = %v, want %v", schedule.lastScheduleAt, tt.wantScheduleAt)
-			}
-			if schedule.deleteCalls != tt.wantSchedDelete {
-				t.Fatalf("schedule Delete calls = %d, want %d", schedule.deleteCalls, tt.wantSchedDelete)
-			}
+
 			if stat.SoftDeleted != tt.wantSoftDeleted {
 				t.Fatalf("SoftDeleted = %d, want %d", stat.SoftDeleted, tt.wantSoftDeleted)
 			}

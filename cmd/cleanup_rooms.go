@@ -60,13 +60,13 @@ var cleanupRoomsCmd = &cobra.Command{
 		}
 		defer activityCacheCloser.Close()
 
-		purgeSchedule, purgeScheduleCloser, err := synapse.NewRoomPurgeScheduleStore(cmd.Context(), cfg.PostgresDSN)
+		purgeSchedule, purgeScheduleCloser, err := processor.NewRoomPurgeScheduleStore(cmd.Context(), cfg.PostgresDSN)
 		if err != nil {
 			return fmt.Errorf("can't create room purge schedule store: %w", err)
 		}
 		defer purgeScheduleCloser.Close()
 
-		if _, ok := purgeSchedule.(synapse.RoomPurgeScheduleNull); ok {
+		if _, ok := purgeSchedule.(*processor.RoomPurgeScheduleMemory); ok {
 			logger.Warn("purge cooldown is not persistent without --postgres-dsn; rooms will be purged without a cooldown")
 		}
 

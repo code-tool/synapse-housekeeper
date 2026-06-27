@@ -1,4 +1,4 @@
-package synapse
+package processor
 
 import (
 	"context"
@@ -26,9 +26,14 @@ type RoomPurgeScheduleStore interface {
 	Delete(ctx context.Context, roomID id.RoomID) error
 }
 
+// NewRoomPurgeScheduleStore returns a Postgres-backed store when dsn is set,
+// or an in-memory store otherwise. The in-memory store is not persisted across
+// runs, so the cooldown is only honored within a single process lifetime.
 func NewRoomPurgeScheduleStore(ctx context.Context, dsn string) (RoomPurgeScheduleStore, io.Closer, error) {
 	if strings.TrimSpace(dsn) == "" {
-		return RoomPurgeScheduleNull{}, noopCloser{}, nil
+		store := NewRoomPurgeScheduleMemory()
+
+		return store, store, nil
 	}
 
 	store, err := NewRoomPurgeSchedulePostgres(ctx, dsn)
