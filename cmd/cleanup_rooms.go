@@ -19,6 +19,7 @@ type CleanupRoomsCmdConfig struct {
 	PostgresDSN          string `mapstructure:"postgres-dsn"`
 	WorkersCount         int    `mapstructure:"workers-count"`
 	AbandonedDays        int    `mapstructure:"abandoned-days"`
+	PurgeCooldownDays    int    `mapstructure:"purge-cooldown-days"`
 	NoCacheCleanup       bool   `mapstructure:"no-cache-cleanup"`
 	FilterOnlyForUserID  string `mapstructure:"filter-only-for-user-id"`
 }
@@ -36,6 +37,9 @@ var cleanupRoomsCmd = &cobra.Command{
 		}
 		if cfg.AbandonedDays < 1 {
 			return fmt.Errorf("abandoned-days must be greater than zero")
+		}
+		if cfg.PurgeCooldownDays < 1 {
+			return fmt.Errorf("purge-cooldown-days must be greater than zero")
 		}
 
 		doRealJob, err := cmd.Flags().GetBool("do-real-job")
@@ -56,13 +60,21 @@ var cleanupRoomsCmd = &cobra.Command{
 		}
 		defer activityCacheCloser.Close()
 
+		purgeSchedule, purgeScheduleCloser, err := synapse.NewRoomPurgeScheduleStore(cmd.Context(), cfg.PostgresDSN)
+		if err != nil {
+			return fmt.Errorf("can't create room purge schedule store: %w", err)
+		}
+		defer purgeScheduleCloser.Close()
+
 		abandonedBefore := time.Now().Add(-time.Duration(cfg.AbandonedDays) * 24 * time.Hour)
+		purgeCooldown := time.Duration(cfg.PurgeCooldownDays) * 24 * time.Hour
 		iterator := synapse.NewRoomCleanupIterator(synapseClient, activityCache)
 
-		return processor.NewRoomCleaner(logger, synapseClient, iterator, cfg.WorkersCount).
+		return processor.NewRoomCleaner(logger, synapseClient, iterator, purgeSchedule, cfg.WorkersCount).
 			Process(cmd.Context(), processor.RoomCleanerOptions{
 				DoRealJob:           doRealJob,
 				AbandonedBefore:     abandonedBefore,
+				PurgeCooldown:       purgeCooldown,
 				NoCacheCleanup:      cfg.NoCacheCleanup,
 				FilterOnlyForUserID: id.UserID(cfg.FilterOnlyForUserID),
 			})
@@ -76,6 +88,7 @@ func init() {
 	cleanupRoomsCmd.Flags().String("postgres-dsn", "", "PostgreSQL DSN for room activity cache")
 
 	cleanupRoomsCmd.Flags().Int("abandoned-days", 458, "Rooms with no messages for this many days are cleanup candidates")
+	cleanupRoomsCmd.Flags().Int("purge-cooldown-days", 7, "Days to wait after soft-delete (purge=false) before fully purging a room")
 	cleanupRoomsCmd.Flags().String("filter-only-for-user-id", "", "When set, only check rooms joined by this user ID")
 
 	cleanupRoomsCmd.Flags().Int("workers-count", 4, "Number of room cleanup workers")

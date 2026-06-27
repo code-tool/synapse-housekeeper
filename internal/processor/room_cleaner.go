@@ -21,6 +21,9 @@ type RoomCleaner struct {
 	log           *zap.Logger
 	synapseClient roomCleanerClient
 	iterator      roomCleanupIterator
+	purgeSchedule synapse.RoomPurgeScheduleStore
+
+	now func() time.Time
 
 	workersCount int
 }
@@ -39,34 +42,36 @@ type roomCleanupIterator interface {
 }
 
 type RoomCleanerStatistics struct {
-	Processed     int64
-	Empty         int64
-	NoMessages    int64
-	AbandonedOne  int64
-	AbandonedPair int64
-	AbandonedMany int64
+	Processed       int64
+	Empty           int64
+	NoMessages      int64
+	AbandonedOne    int64
+	AbandonedPair   int64
+	AbandonedMany   int64
+	SoftDeleted     int64
+	CooldownSkipped int64
+	Purged          int64
 }
 
-func NewRoomCleaner(log *zap.Logger, synapseClient roomCleanerClient, iterator roomCleanupIterator, workersCount int) *RoomCleaner {
-	return &RoomCleaner{log: log, synapseClient: synapseClient, iterator: iterator, workersCount: workersCount}
-}
-
-func (r *RoomCleaner) purgeRoom(ctx context.Context, doRealJob bool, roomInfo *synapseadmin.RoomInfo) error {
-	if !doRealJob {
-		return nil
+func NewRoomCleaner(log *zap.Logger, synapseClient roomCleanerClient, iterator roomCleanupIterator, purgeSchedule synapse.RoomPurgeScheduleStore, workersCount int) *RoomCleaner {
+	return &RoomCleaner{
+		log:           log,
+		synapseClient: synapseClient,
+		iterator:      iterator,
+		purgeSchedule: purgeSchedule,
+		now:           time.Now,
+		workersCount:  workersCount,
 	}
+}
 
-	r.log.Info("deleting room",
-		zap.Stringer("room_id", roomInfo.RoomID),
-		zap.Int("joined_members", roomInfo.JoinedMembers))
-
-	_, err := r.synapseClient.DeleteRoom(ctx, roomInfo.RoomID, synapseadmin.ReqDeleteRoom{Purge: true})
+func (r *RoomCleaner) deleteRoom(ctx context.Context, roomID id.RoomID, purge bool) error {
+	_, err := r.synapseClient.DeleteRoom(ctx, roomID, synapseadmin.ReqDeleteRoom{Purge: purge})
 	if err == nil {
 		return nil
 	}
 
 	if httpErr, ok := errors.AsType[mautrix.HTTPError](err); ok && httpErr.IsStatus(400) {
-		if dStatusResp, err := r.synapseClient.DeleteStatus(ctx, roomInfo.RoomID); err == nil {
+		if dStatusResp, err := r.synapseClient.DeleteStatus(ctx, roomID); err == nil {
 			if len(dStatusResp.Results) > 0 {
 				r.log.Warn("room delete already scheduled", zap.String("status", dStatusResp.Results[0].Status))
 				return nil
@@ -75,6 +80,75 @@ func (r *RoomCleaner) purgeRoom(ctx context.Context, doRealJob bool, roomInfo *s
 	}
 
 	return fmt.Errorf("can't delete room: %w", err)
+}
+
+func (r *RoomCleaner) purgeRoom(
+	ctx context.Context,
+	doRealJob bool,
+	cooldown time.Duration,
+	stat *RoomCleanerStatistics,
+	roomInfo *synapseadmin.RoomInfo,
+) error {
+	now := r.now()
+
+	record, err := r.purgeSchedule.Get(ctx, roomInfo.RoomID)
+	if err != nil {
+		return fmt.Errorf("get purge schedule: %w", err)
+	}
+
+	log := r.log.With(
+		zap.Stringer("room_id", roomInfo.RoomID),
+		zap.Int("joined_members", roomInfo.JoinedMembers))
+
+	// Phase 1: room still has members -> soft-delete (purge=false) and start the cooldown.
+	if roomInfo.JoinedMembers > 0 {
+		if record != nil {
+			log.Warn("purge already scheduled but room still has members; skipping",
+				zap.Time("purge_after", record.PurgeAfter))
+			return nil
+		}
+
+		log.Info("soft-deleting room", zap.Bool("purge", false))
+		if !doRealJob {
+			return nil
+		}
+
+		if err := r.deleteRoom(ctx, roomInfo.RoomID, false); err != nil {
+			return err
+		}
+		if err := r.purgeSchedule.Schedule(ctx, roomInfo.RoomID, now.Add(cooldown)); err != nil {
+			return fmt.Errorf("schedule purge: %w", err)
+		}
+		atomic.AddInt64(&stat.SoftDeleted, 1)
+
+		return nil
+	}
+
+	// Room is empty: still inside cooldown -> skip until it elapses.
+	if record != nil && now.Before(record.PurgeAfter) {
+		log.Info("purge cooldown active; skipping", zap.Time("purge_after", record.PurgeAfter))
+		atomic.AddInt64(&stat.CooldownSkipped, 1)
+
+		return nil
+	}
+
+	// Phase 2 (or naturally empty room): full purge is safe with zero members.
+	log.Info("purging room", zap.Bool("purge", true))
+	if !doRealJob {
+		return nil
+	}
+
+	if err := r.deleteRoom(ctx, roomInfo.RoomID, true); err != nil {
+		return err
+	}
+	if record != nil {
+		if err := r.purgeSchedule.Delete(ctx, roomInfo.RoomID); err != nil {
+			return fmt.Errorf("delete purge schedule: %w", err)
+		}
+	}
+	atomic.AddInt64(&stat.Purged, 1)
+
+	return nil
 }
 
 func (r *RoomCleaner) recordCandidate(stat *RoomCleanerStatistics, candidate synapse.RoomCleanupCandidate) {
@@ -111,7 +185,7 @@ func (r *RoomCleaner) recordCandidate(stat *RoomCleanerStatistics, candidate syn
 
 func (r *RoomCleaner) worker(
 	ctx context.Context,
-	doRealJob bool, stat *RoomCleanerStatistics,
+	doRealJob bool, cooldown time.Duration, stat *RoomCleanerStatistics,
 	jobs <-chan synapse.RoomCleanupCandidate,
 ) error {
 	for {
@@ -125,7 +199,7 @@ func (r *RoomCleaner) worker(
 
 			r.recordCandidate(stat, candidate)
 
-			if err := r.purgeRoom(ctx, doRealJob, &candidate.Room); err != nil {
+			if err := r.purgeRoom(ctx, doRealJob, cooldown, stat, &candidate.Room); err != nil {
 				return err
 			}
 		}
@@ -135,6 +209,7 @@ func (r *RoomCleaner) worker(
 type RoomCleanerOptions struct {
 	DoRealJob           bool
 	AbandonedBefore     time.Time
+	PurgeCooldown       time.Duration
 	NoCacheCleanup      bool
 	FilterOnlyForUserID id.UserID
 }
@@ -151,6 +226,9 @@ func (r *RoomCleaner) Process(ctx context.Context, opts RoomCleanerOptions) erro
 				zap.Int64("pair", atomic.LoadInt64(&stat.AbandonedPair)),
 				zap.Int64("many", atomic.LoadInt64(&stat.AbandonedMany)),
 			)),
+			zap.Int64("soft_deleted", atomic.LoadInt64(&stat.SoftDeleted)),
+			zap.Int64("cooldown_skipped", atomic.LoadInt64(&stat.CooldownSkipped)),
+			zap.Int64("purged", atomic.LoadInt64(&stat.Purged)),
 		)
 	}
 	defer logStats()
@@ -160,7 +238,7 @@ func (r *RoomCleaner) Process(ctx context.Context, opts RoomCleanerOptions) erro
 
 	for i := 0; i < r.workersCount; i++ {
 		errG.Go(func() error {
-			return r.worker(ctx, opts.DoRealJob, stat, roomInfoChan)
+			return r.worker(ctx, opts.DoRealJob, opts.PurgeCooldown, stat, roomInfoChan)
 		})
 	}
 
