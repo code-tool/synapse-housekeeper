@@ -66,6 +66,10 @@ var cleanupRoomsCmd = &cobra.Command{
 		}
 		defer purgeScheduleCloser.Close()
 
+		if _, ok := purgeSchedule.(synapse.RoomPurgeScheduleNull); ok {
+			logger.Warn("purge cooldown is not persistent without --postgres-dsn; rooms will be purged without a cooldown")
+		}
+
 		abandonedBefore := time.Now().Add(-time.Duration(cfg.AbandonedDays) * 24 * time.Hour)
 		purgeCooldown := time.Duration(cfg.PurgeCooldownDays) * 24 * time.Hour
 		iterator := synapse.NewRoomCleanupIterator(synapseClient, activityCache)
