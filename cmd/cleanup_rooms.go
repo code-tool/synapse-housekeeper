@@ -92,7 +92,7 @@ func init() {
 	cleanupRoomsCmd.Flags().String("postgres-dsn", "", "PostgreSQL DSN for room activity cache")
 
 	cleanupRoomsCmd.Flags().Int("abandoned-days", 458, "Rooms with no messages for this many days are cleanup candidates")
-	cleanupRoomsCmd.Flags().Int("purge-cooldown-days", 7, "Days to wait after soft-delete (purge=false) before fully purging a room")
+	cleanupRoomsCmd.Flags().Int("purge-cooldown-days", 14, "Days to wait after soft-delete (purge=false) before fully purging a room")
 	cleanupRoomsCmd.Flags().String("filter-only-for-user-id", "", "When set, only check rooms joined by this user ID")
 
 	cleanupRoomsCmd.Flags().Int("workers-count", 4, "Number of room cleanup workers")
