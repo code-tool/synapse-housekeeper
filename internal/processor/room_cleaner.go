@@ -226,9 +226,11 @@ func (r *RoomCleaner) Process(ctx context.Context, opts RoomCleanerOptions) erro
 				zap.Int64("pair", atomic.LoadInt64(&stat.AbandonedPair)),
 				zap.Int64("many", atomic.LoadInt64(&stat.AbandonedMany)),
 			)),
-			zap.Int64("soft_deleted", atomic.LoadInt64(&stat.SoftDeleted)),
-			zap.Int64("cooldown_skipped", atomic.LoadInt64(&stat.CooldownSkipped)),
-			zap.Int64("purged", atomic.LoadInt64(&stat.Purged)),
+			zap.Object("exec", zap.DictObject(
+				zap.Int64("soft_deleted", atomic.LoadInt64(&stat.SoftDeleted)),
+				zap.Int64("cooldown_skipped", atomic.LoadInt64(&stat.CooldownSkipped)),
+				zap.Int64("purged", atomic.LoadInt64(&stat.Purged)),
+			)),
 		)
 	}
 	defer logStats()
