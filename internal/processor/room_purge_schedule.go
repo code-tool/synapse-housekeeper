@@ -20,7 +20,8 @@ type RoomPurgeScheduleStore interface {
 	// Get returns the schedule for roomID, or (nil, nil) when none exists.
 	Get(ctx context.Context, roomID id.RoomID) (*RoomPurgeSchedule, error)
 	// Schedule records purgeAfter for roomID. It does not overwrite an
-	// existing record (the cooldown is set once, when the room is soft-deleted).
+	// existing record (the cooldown is set once, when the room is first
+	// soft-deleted or, for an already-empty room, first seen).
 	Schedule(ctx context.Context, roomID id.RoomID, purgeAfter time.Time) error
 	// Delete removes the schedule for roomID after a successful full purge.
 	Delete(ctx context.Context, roomID id.RoomID) error

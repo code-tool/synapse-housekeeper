@@ -107,6 +107,7 @@ func TestRoomCleanerPurgeRoom(t *testing.T) {
 		wantRecord           bool
 		wantRecordPurgeAfter time.Time
 		wantSoftDeleted      int64
+		wantScheduled        int64
 		wantCooldownSkip     int64
 		wantPurged           int64
 	}{
@@ -121,13 +122,16 @@ func TestRoomCleanerPurgeRoom(t *testing.T) {
 			wantSoftDeleted:      1,
 		},
 		{
-			name:                 "members present but already scheduled skips",
+			name:                 "members present but already scheduled re-soft-deletes",
 			doRealJob:            true,
 			joinedMembers:        2,
 			seedRecord:           true,
 			seedPurgeAfter:       now.Add(time.Hour),
+			wantDeleteCalls:      1,
+			wantPurge:            false,
 			wantRecord:           true,
 			wantRecordPurgeAfter: now.Add(time.Hour),
+			wantSoftDeleted:      1,
 		},
 		{
 			name:                 "empty within cooldown skips",
@@ -150,12 +154,12 @@ func TestRoomCleanerPurgeRoom(t *testing.T) {
 			wantPurged:      1,
 		},
 		{
-			name:            "naturally empty purges immediately",
-			doRealJob:       true,
-			joinedMembers:   0,
-			wantDeleteCalls: 1,
-			wantPurge:       true,
-			wantPurged:      1,
+			name:                 "naturally empty schedules cooldown",
+			doRealJob:            true,
+			joinedMembers:        0,
+			wantRecord:           true,
+			wantRecordPurgeAfter: now.Add(cooldown),
+			wantScheduled:        1,
 		},
 		{
 			name:          "dry run does nothing",
@@ -179,7 +183,8 @@ func TestRoomCleanerPurgeRoom(t *testing.T) {
 			stat := &RoomCleanerStatistics{}
 			room := &synapseadmin.RoomInfo{RoomID: roomID, JoinedMembers: tt.joinedMembers}
 
-			if err := cleaner.purgeRoom(ctx, tt.doRealJob, cooldown, stat, room); err != nil {
+			opts := &RoomCleanerOptions{DoRealJob: tt.doRealJob, PurgeCooldown: cooldown}
+			if err := cleaner.purgeRoom(ctx, opts, stat, room); err != nil {
 				t.Fatalf("purgeRoom() error = %v", err)
 			}
 
@@ -207,6 +212,9 @@ func TestRoomCleanerPurgeRoom(t *testing.T) {
 
 			if stat.SoftDeleted != tt.wantSoftDeleted {
 				t.Fatalf("SoftDeleted = %d, want %d", stat.SoftDeleted, tt.wantSoftDeleted)
+			}
+			if stat.Scheduled != tt.wantScheduled {
+				t.Fatalf("Scheduled = %d, want %d", stat.Scheduled, tt.wantScheduled)
 			}
 			if stat.CooldownSkipped != tt.wantCooldownSkip {
 				t.Fatalf("CooldownSkipped = %d, want %d", stat.CooldownSkipped, tt.wantCooldownSkip)

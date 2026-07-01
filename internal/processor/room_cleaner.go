@@ -49,6 +49,7 @@ type RoomCleanerStatistics struct {
 	AbandonedPair   int64
 	AbandonedMany   int64
 	SoftDeleted     int64
+	Scheduled       int64
 	CooldownSkipped int64
 	Purged          int64
 }
@@ -82,73 +83,86 @@ func (r *RoomCleaner) deleteRoom(ctx context.Context, roomID id.RoomID, purge bo
 	return fmt.Errorf("can't delete room: %w", err)
 }
 
+// schedulePurge records when roomID becomes eligible for a full purge, starting
+// its cooldown. Shared by the soft-delete and already-empty branches.
+func (r *RoomCleaner) schedulePurge(ctx context.Context, roomID id.RoomID, purgeAfter time.Time) error {
+	if err := r.purgeSchedule.Schedule(ctx, roomID, purgeAfter); err != nil {
+		return fmt.Errorf("schedule purge: %w", err)
+	}
+
+	return nil
+}
+
 func (r *RoomCleaner) purgeRoom(
 	ctx context.Context,
-	doRealJob bool,
-	cooldown time.Duration,
+	opts *RoomCleanerOptions,
 	stat *RoomCleanerStatistics,
 	roomInfo *synapseadmin.RoomInfo,
 ) error {
-	now := r.now()
-
 	record, err := r.purgeSchedule.Get(ctx, roomInfo.RoomID)
 	if err != nil {
 		return fmt.Errorf("get purge schedule: %w", err)
 	}
 
+	now := r.now()
+	purgeAfter := now.Add(opts.PurgeCooldown)
 	log := r.log.With(
 		zap.Stringer("room_id", roomInfo.RoomID),
 		zap.Int("joined_members", roomInfo.JoinedMembers))
 
-	// Phase 1: room still has members -> soft-delete (purge=false) and start the cooldown.
-	if roomInfo.JoinedMembers > 0 {
+	switch {
+	case roomInfo.JoinedMembers > 0:
+		// Room still has members -> soft-delete (purge=false) and start the cooldown.
 		if record != nil {
-			log.Warn("purge already scheduled but room still has members; skipping",
+			log.Warn("purge already scheduled but room still has members",
 				zap.Time("purge_after", record.PurgeAfter))
-			return nil
 		}
-
 		log.Info("soft-deleting room", zap.Bool("purge", false))
-		if !doRealJob {
+		if !opts.DoRealJob {
 			return nil
 		}
-
-		if err := r.purgeSchedule.Schedule(ctx, roomInfo.RoomID, now.Add(cooldown)); err != nil {
-			return fmt.Errorf("schedule purge: %w", err)
+		if err := r.schedulePurge(ctx, roomInfo.RoomID, purgeAfter); err != nil {
+			return err
 		}
 		if err := r.deleteRoom(ctx, roomInfo.RoomID, false); err != nil {
 			return err
 		}
 		atomic.AddInt64(&stat.SoftDeleted, 1)
-
 		return nil
-	}
 
-	// Room is empty: still inside cooldown -> skip until it elapses.
-	if record != nil && now.Before(record.PurgeAfter) {
+	case record == nil:
+		// Empty room not scheduled yet -> record it so it also "settles" before the purge.
+		log.Info("scheduling empty room for purge", zap.Time("purge_after", purgeAfter))
+		if !opts.DoRealJob {
+			return nil
+		}
+		if err := r.schedulePurge(ctx, roomInfo.RoomID, purgeAfter); err != nil {
+			return err
+		}
+		atomic.AddInt64(&stat.Scheduled, 1)
+		return nil
+
+	case now.Before(record.PurgeAfter):
+		// Empty room still inside its cooldown -> skip until it elapses.
 		log.Info("purge cooldown active; skipping", zap.Time("purge_after", record.PurgeAfter))
 		atomic.AddInt64(&stat.CooldownSkipped, 1)
-
 		return nil
-	}
 
-	// Phase 2 (or naturally empty room): full purge is safe with zero members.
-	log.Info("purging room", zap.Bool("purge", true))
-	if !doRealJob {
-		return nil
-	}
-
-	if err := r.deleteRoom(ctx, roomInfo.RoomID, true); err != nil {
-		return err
-	}
-	if record != nil {
+	default:
+		// Empty room with an elapsed cooldown -> full purge is safe with zero members.
+		log.Info("purging room", zap.Bool("purge", true))
+		if !opts.DoRealJob {
+			return nil
+		}
+		if err := r.deleteRoom(ctx, roomInfo.RoomID, true); err != nil {
+			return err
+		}
 		if err := r.purgeSchedule.Delete(ctx, roomInfo.RoomID); err != nil {
 			return fmt.Errorf("delete purge schedule: %w", err)
 		}
+		atomic.AddInt64(&stat.Purged, 1)
+		return nil
 	}
-	atomic.AddInt64(&stat.Purged, 1)
-
-	return nil
 }
 
 func (r *RoomCleaner) recordCandidate(stat *RoomCleanerStatistics, candidate synapse.RoomCleanupCandidate) {
@@ -185,7 +199,7 @@ func (r *RoomCleaner) recordCandidate(stat *RoomCleanerStatistics, candidate syn
 
 func (r *RoomCleaner) worker(
 	ctx context.Context,
-	doRealJob bool, cooldown time.Duration, stat *RoomCleanerStatistics,
+	opts *RoomCleanerOptions, stat *RoomCleanerStatistics,
 	jobs <-chan synapse.RoomCleanupCandidate,
 ) error {
 	for {
@@ -199,7 +213,7 @@ func (r *RoomCleaner) worker(
 
 			r.recordCandidate(stat, candidate)
 
-			if err := r.purgeRoom(ctx, doRealJob, cooldown, stat, &candidate.Room); err != nil {
+			if err := r.purgeRoom(ctx, opts, stat, &candidate.Room); err != nil {
 				return err
 			}
 		}
@@ -228,6 +242,7 @@ func (r *RoomCleaner) Process(ctx context.Context, opts RoomCleanerOptions) erro
 			)),
 			zap.Object("exec", zap.DictObject(
 				zap.Int64("soft_deleted", atomic.LoadInt64(&stat.SoftDeleted)),
+				zap.Int64("scheduled", atomic.LoadInt64(&stat.Scheduled)),
 				zap.Int64("cooldown_skipped", atomic.LoadInt64(&stat.CooldownSkipped)),
 				zap.Int64("purged", atomic.LoadInt64(&stat.Purged)),
 			)),
@@ -240,7 +255,7 @@ func (r *RoomCleaner) Process(ctx context.Context, opts RoomCleanerOptions) erro
 
 	for i := 0; i < r.workersCount; i++ {
 		errG.Go(func() error {
-			return r.worker(ctx, opts.DoRealJob, opts.PurgeCooldown, stat, roomInfoChan)
+			return r.worker(ctx, &opts, stat, roomInfoChan)
 		})
 	}
 
