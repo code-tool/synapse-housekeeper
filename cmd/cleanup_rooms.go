@@ -99,5 +99,5 @@ func init() {
 	cleanupRoomsCmd.Flags().Bool("no-cache-cleanup", false, "Write candidates to cache and skip eviction (for analytics before real deletion)")
 	cleanupRoomsCmd.Flags().Bool("do-real-job", false, "Without this flag to action will be performed")
 
-	rootCmd.AddCommand(cleanupRoomsCmd)
+	rootCmd.AddCommand(decorateRunWithMaxDuration(cleanupRoomsCmd))
 }

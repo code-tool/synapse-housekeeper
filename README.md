@@ -88,6 +88,7 @@ synapse-housekeeper cleanup-rooms --do-real-job
 | `--filter-only-for-user-id` | | When set, only check rooms joined by this user ID. |
 | `--workers-count` | `4` | Number of concurrent room cleanup workers. |
 | `--no-cache-cleanup` | `false` | Write candidates to the cache and skip eviction (for analytics before real deletion). |
+| `--max-duration` | `0` | Stop the run after this wall-clock budget (e.g. `30m`, `2h`); `0` means no limit. |
 | `--do-real-job` | `false` | Perform deletions. Without it, nothing is deleted. |
 
 > **Note:** The purge cooldown is only persistent when `--postgres-dsn` is set.
@@ -98,6 +99,10 @@ synapse-housekeeper cleanup-rooms --do-real-job
 ```sh
 synapse-housekeeper cleanup-devices --do-real-job
 ```
+
+Like `cleanup-rooms`, this command accepts `--max-duration` to cap how long the
+run may take. Reaching the budget is a clean stop — because every operation is
+idempotent, whatever was left is simply picked up on the next run.
 
 ### Mark a user as a bot
 

@@ -49,5 +49,5 @@ func init() {
 
 	cleanupDevicesCmd.Flags().Bool("do-real-job", false, "Without this flag to action will be performed")
 
-	rootCmd.AddCommand(cleanupDevicesCmd)
+	rootCmd.AddCommand(decorateRunWithMaxDuration(cleanupDevicesCmd))
 }

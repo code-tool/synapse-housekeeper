@@ -282,8 +282,9 @@ func (r *RoomCleaner) Process(ctx context.Context, opts RoomCleanerOptions) erro
 			atomic.AddInt64(&stat.Processed, 1)
 		},
 		OnRoomError: func(ctx context.Context, roomInfo synapseadmin.RoomInfo, err error) bool {
-			if !errors.Is(err, context.Canceled) {
-				r.log.Error("Failed to check room status", zap.String("room_id", string(roomInfo.RoomID)), zap.Error(err))
+			// Suppress the log only when the whole run is being torn down
+			if ctx.Err() == nil {
+				r.log.Error("Failed to check room status", zap.Stringer("room_id", roomInfo.RoomID), zap.Error(err))
 			}
 
 			return true
