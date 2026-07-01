@@ -10,6 +10,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 var (
@@ -21,7 +22,6 @@ type RootCmdConfig struct {
 	LogLevel int  `mapstructure:"log-level"`
 }
 
-// rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "synapse-housekeeper",
 	Short: "Set of tools to clean up Synapse",
@@ -30,10 +30,18 @@ var rootCmd = &cobra.Command{
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
+	logger = createLogger(false, int(zapcore.InfoLevel))
+
 	ctx, cancel := context.WithCancel(context.Background())
 	errChan := make(chan error, 1)
 
+	flagsParsed := false
+
 	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) (err error) {
+		flagsParsed = true
+		cmd.SilenceUsage = true
+		cmd.SilenceErrors = true
+
 		cfg, err := CreateConfigFromViper[RootCmdConfig](viper.New(), rootCmd.PersistentFlags())
 		if err != nil {
 			return err
@@ -56,7 +64,10 @@ func Execute() {
 			return
 		}
 
-		logger.Error("command execution failed", zap.Error(err))
+		if flagsParsed {
+			logger.Error("command execution failed", zap.Error(err))
+		}
+
 		os.Exit(1)
 	}
 
@@ -66,7 +77,7 @@ func Execute() {
 		shutdown(err)
 	case <-sigs:
 		cancel()
-		shutdown(<-errChan)
+		<-errChan
 	}
 }
 
